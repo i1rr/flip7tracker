@@ -17,7 +17,7 @@ pub enum State {
     #[default]
     MainMenu,
     NewGameSetup { players: Vec<i64> },
-    NewGameTypingName { players: Vec<i64> },
+    NewGameTypingName { players: Vec<i64>, setup_msg_id: i32 },
     NewGameKnownPlayers { players: Vec<i64>, page: u32 },
     GameActive { game_id: i64 },
     GameAddScoreSelectPlayer { game_id: i64 },
@@ -53,7 +53,7 @@ pub fn build_handler() -> UpdateHandler<Box<dyn std::error::Error + Send + Sync 
 
     let message_handler = Update::filter_message()
         .branch(command_handler)
-        .branch(case![State::NewGameTypingName { players }].endpoint(new_game::handle_typing_name))
+        .branch(case![State::NewGameTypingName { players, setup_msg_id }].endpoint(new_game::handle_typing_name))
         .branch(
             case![State::GameAddScoreEnterPoints { game_id, player_id }]
                 .endpoint(game::handle_enter_points),
@@ -81,7 +81,8 @@ pub fn build_handler() -> UpdateHandler<Box<dyn std::error::Error + Send + Sync 
         .branch(
             case![State::StatsPlayerDetail { player_id }]
                 .endpoint(statistics::handle_player_detail_callback),
-        );
+        )
+        .branch(dptree::endpoint(menu::handle_unknown_callback));
 
     dialogue::enter::<Update, InMemStorage<State>, State, _>()
         .branch(message_handler)

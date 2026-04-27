@@ -13,7 +13,7 @@ pub async fn create_or_get_player(pool: &SqlitePool, name: &str) -> Result<Playe
         .execute(pool)
         .await?;
     sqlx::query_as::<_, Player>(
-        "SELECT id, name, is_deleted as 'is_deleted: bool', created_at FROM players WHERE name = ?"
+        "SELECT id, name, is_deleted, created_at FROM players WHERE name = ?"
     )
     .bind(name)
     .fetch_one(pool)
@@ -22,7 +22,7 @@ pub async fn create_or_get_player(pool: &SqlitePool, name: &str) -> Result<Playe
 
 pub async fn get_all_active_players(pool: &SqlitePool) -> Result<Vec<Player>, sqlx::Error> {
     sqlx::query_as::<_, Player>(
-        "SELECT id, name, is_deleted as 'is_deleted: bool', created_at FROM players WHERE is_deleted = 0 ORDER BY name"
+        "SELECT id, name, is_deleted, created_at FROM players WHERE is_deleted = 0 ORDER BY name"
     )
     .fetch_all(pool)
     .await
@@ -133,7 +133,7 @@ pub async fn get_game_scores(pool: &SqlitePool, game_id: i64) -> Result<HashMap<
 
 pub async fn get_game_players(pool: &SqlitePool, game_id: i64) -> Result<Vec<Player>, sqlx::Error> {
     sqlx::query_as::<_, Player>(
-        "SELECT p.id, p.name, p.is_deleted as 'is_deleted: bool', p.created_at \
+        "SELECT p.id, p.name, p.is_deleted, p.created_at \
          FROM players p \
          JOIN game_players gp ON p.id = gp.player_id \
          WHERE gp.game_id = ? \

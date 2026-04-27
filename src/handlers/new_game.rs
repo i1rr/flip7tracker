@@ -1,5 +1,5 @@
 use teloxide::prelude::*;
-use teloxide::types::ParseMode;
+use teloxide::types::{MessageId, ParseMode};
 use sqlx::SqlitePool;
 
 use crate::db::models::Player;
@@ -8,7 +8,15 @@ use crate::handlers::{HandlerResult, MyDialogue, State};
 use crate::keyboards;
 use crate::utils::scoreboard;
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn q_msg(q: &CallbackQuery) -> Option<(teloxide::types::ChatId, MessageId)> {
+    q.message.as_ref().and_then(|m| {
+        m.regular_message().map(|r| (m.chat().id, r.id))
+    })
+}
 
 fn setup_text(players: &[i64], all_players: &[Player]) -> String {
     let names: Vec<&str> = players
@@ -23,59 +31,35 @@ fn setup_text(players: &[i64], all_players: &[Player]) -> String {
     }
 }
 
-async fn send_setup(
+/// Edit a specific message to the setup screen.
+async fn edit_to_setup(
     bot: &Bot,
-    chat_id: ChatId,
+    chat_id: teloxide::types::ChatId,
+    msg_id: MessageId,
     players: &[i64],
     all_players: &[Player],
 ) -> HandlerResult {
-    bot.send_message(chat_id, setup_text(players, all_players))
+    let _ = bot
+        .edit_message_text(chat_id, msg_id, setup_text(players, all_players))
         .reply_markup(keyboards::new_game::setup_keyboard(players, all_players))
-        .await?;
+        .await;
     Ok(())
 }
 
-async fn show_known_players_page(
-    bot: &Bot,
-    chat_id: ChatId,
-    added_ids: &[i64],
-    all_players: &[Player],
-    page: u32,
-) -> HandlerResult {
-    let available: Vec<&Player> = all_players
-        .iter()
-        .filter(|p| !added_ids.contains(&p.id))
-        .collect();
-    let per_page: usize = 8;
-    let total_pages = ((available.len() as f32) / per_page as f32).ceil() as u32;
-    let total_pages = total_pages.max(1);
-    let start = (page as usize) * per_page;
-    let page_players: Vec<&Player> = available.into_iter().skip(start).take(per_page).collect();
-
-    let kb = keyboards::new_game::known_players_keyboard(&page_players, page, total_pages);
-    bot.send_message(
-        chat_id,
-        format!("Select a player (page {}/{}):", page + 1, total_pages),
-    )
-    .reply_markup(kb)
-    .await?;
-    Ok(())
-}
-
-// ── Step 4.2: typing name ─────────────────────────────────────────────────────
-
+// ---------------------------------------------------------------------------
+// Typing name handler (State::NewGameTypingName)
+// ---------------------------------------------------------------------------
 pub async fn handle_typing_name(
     bot: Bot,
     dialogue: MyDialogue,
     msg: Message,
     pool: SqlitePool,
-    players: Vec<i64>,
+    (players, setup_msg_id): (Vec<i64>, i32),
 ) -> HandlerResult {
     let text = match msg.text() {
         Some(t) => t.trim().to_string(),
         None => {
-            bot.send_message(msg.chat.id, "Please enter a player name.")
-                .await?;
+            bot.send_message(msg.chat.id, "Please enter a player name.").await?;
             return Ok(());
         }
     };
@@ -83,7 +67,7 @@ pub async fn handle_typing_name(
     if text.is_empty() || text.len() > 50 || text.chars().any(|c| c.is_control()) {
         bot.send_message(
             msg.chat.id,
-            "Invalid name. Use 1-50 characters, no control characters.",
+            "Invalid name. Use 1–50 characters, no control characters.",
         )
         .await?;
         return Ok(());
@@ -92,27 +76,33 @@ pub async fn handle_typing_name(
     let player = queries::create_or_get_player(&pool, &text).await?;
 
     if players.contains(&player.id) {
-        bot.send_message(msg.chat.id, format!("{} is already added.", text))
-            .await?;
+        bot.send_message(msg.chat.id, format!("{} is already added.", text)).await?;
         return Ok(());
     }
 
     let mut updated = players.clone();
     updated.push(player.id);
 
-    dialogue
-        .update(State::NewGameSetup {
-            players: updated.clone(),
-        })
-        .await?;
-
     let all_players = queries::get_all_active_players(&pool).await?;
-    send_setup(&bot, msg.chat.id, &updated, &all_players).await?;
+    // Edit the original setup message back to show the updated setup
+    edit_to_setup(
+        &bot,
+        msg.chat.id,
+        MessageId(setup_msg_id),
+        &updated,
+        &all_players,
+    )
+    .await?;
+
+    dialogue
+        .update(State::NewGameSetup { players: updated })
+        .await?;
     Ok(())
 }
 
-// ── Step 4.3/4.4/4.5: setup callback ─────────────────────────────────────────
-
+// ---------------------------------------------------------------------------
+// Setup callbacks (State::NewGameSetup)
+// ---------------------------------------------------------------------------
 pub async fn handle_setup_callback(
     bot: Bot,
     dialogue: MyDialogue,
@@ -122,64 +112,72 @@ pub async fn handle_setup_callback(
 ) -> HandlerResult {
     bot.answer_callback_query(&q.id).await?;
 
-    let data = q.data.as_deref().unwrap_or("");
-    let chat_id = match q.message.as_ref() {
-        Some(m) => m.chat().id,
+    let (chat_id, msg_id) = match q_msg(&q) {
+        Some(v) => v,
         None => return Ok(()),
     };
 
+    let data = q.data.as_deref().unwrap_or("");
     let parts: Vec<&str> = data.splitn(3, ':').collect();
 
     match parts.as_slice() {
-        // ── add new player by typing ──────────────────────────────────────────
+        // ── Add new player by typing ──────────────────────────────────────────
         ["setup", "add_new"] => {
+            let _ = bot
+                .edit_message_text(chat_id, msg_id, "Enter the new player's name:")
+                .await;
             dialogue
                 .update(State::NewGameTypingName {
                     players: players.clone(),
+                    setup_msg_id: msg_id.0,
                 })
-                .await?;
-            bot.send_message(chat_id, "Enter the new player's name:")
                 .await?;
         }
 
-        // ── add from known list ───────────────────────────────────────────────
+        // ── Add from known list ───────────────────────────────────────────────
         ["setup", "known"] => {
             let all_players = queries::get_all_active_players(&pool).await?;
+            let available: Vec<&Player> = all_players
+                .iter()
+                .filter(|p| !players.contains(&p.id))
+                .collect();
+            if available.is_empty() {
+                bot.answer_callback_query(&q.id)
+                    .text("No other players to add.")
+                    .show_alert(false)
+                    .await?;
+                return Ok(());
+            }
+            show_known_players_in_msg(
+                &bot, chat_id, msg_id, &players, &all_players, 0,
+            )
+            .await?;
             dialogue
-                .update(State::NewGameKnownPlayers {
-                    players: players.clone(),
-                    page: 0,
-                })
+                .update(State::NewGameKnownPlayers { players: players.clone(), page: 0 })
                 .await?;
-            show_known_players_page(&bot, chat_id, &players, &all_players, 0).await?;
         }
 
-        // ── start game ────────────────────────────────────────────────────────
+        // ── Start game ────────────────────────────────────────────────────────
         ["setup", "start"] => {
             if players.len() < 2 {
-                bot.send_message(chat_id, "Need at least 2 players to start.")
+                bot.answer_callback_query(&q.id)
+                    .text("Need at least 2 players to start.")
+                    .show_alert(true)
                     .await?;
                 return Ok(());
             }
 
             let unfinished = queries::get_unfinished_games(&pool, chat_id.0).await?;
             if !unfinished.is_empty() {
-                bot.send_message(
-                    chat_id,
-                    "You have an unfinished game. Load it via Load Game or end it first.",
-                )
-                .await?;
+                bot.answer_callback_query(&q.id)
+                    .text("You have an unfinished game. Load it or end it first.")
+                    .show_alert(true)
+                    .await?;
                 return Ok(());
             }
 
-            // Edit the setup message to "Starting game..." if we can get its id
-            if let Some(msg) = q.message.as_ref() {
-                if let Some(regular) = msg.regular_message() {
-                    let _ = bot
-                        .edit_message_text(chat_id, regular.id, "Starting game...")
-                        .await;
-                }
-            }
+            // Delete the setup message
+            let _ = bot.delete_message(chat_id, msg_id).await;
 
             let game = queries::create_game(&pool, chat_id.0).await?;
             for &pid in &players {
@@ -203,25 +201,27 @@ pub async fn handle_setup_callback(
                 .await?;
 
             queries::update_game_message_id(&pool, game.id, sent.id.0 as i64).await?;
-            dialogue
-                .update(State::GameActive { game_id: game.id })
-                .await?;
+            dialogue.update(State::GameActive { game_id: game.id }).await?;
         }
 
-        // ── back to main menu ─────────────────────────────────────────────────
+        // ── Back to main menu ─────────────────────────────────────────────────
         ["setup", "back"] => {
-            dialogue.update(State::MainMenu).await?;
-            bot.send_message(chat_id, "Main menu:")
+            let _ = bot
+                .edit_message_text(chat_id, msg_id, "Welcome to Flip7! Choose an option:")
                 .reply_markup(keyboards::menu::main_menu_keyboard())
+                .await;
+            dialogue.update(State::MainMenu).await?;
+        }
+
+        // ── Disabled start (< 2 players) ──────────────────────────────────────
+        ["setup", "disabled"] => {
+            bot.answer_callback_query(&q.id)
+                .text("Add at least 2 players first.")
+                .show_alert(false)
                 .await?;
         }
 
-        // ── disabled start (not enough players) ───────────────────────────────
-        ["setup", "disabled"] => {
-            // Already answered above; nothing else to do
-        }
-
-        // ── remove player (show confirm) ──────────────────────────────────────
+        // ── Remove player (confirm) ───────────────────────────────────────────
         ["player", "remove", player_id_str] => {
             if let Ok(player_id) = player_id_str.parse::<i64>() {
                 let all_players = queries::get_all_active_players(&pool).await?;
@@ -231,31 +231,30 @@ pub async fn handle_setup_callback(
                     .map(|p| p.name.clone())
                     .unwrap_or_default();
                 let kb = keyboards::new_game::confirm_remove_keyboard(player_id);
-                bot.send_message(chat_id, format!("Remove {}?", name))
+                let _ = bot
+                    .edit_message_text(chat_id, msg_id, format!("Remove {}?", name))
                     .reply_markup(kb)
-                    .await?;
+                    .await;
             }
         }
 
-        // ── confirm remove ────────────────────────────────────────────────────
+        // ── Confirm remove ────────────────────────────────────────────────────
         ["player", "confirm_remove", player_id_str] => {
             if let Ok(player_id) = player_id_str.parse::<i64>() {
                 let updated: Vec<i64> =
                     players.into_iter().filter(|&id| id != player_id).collect();
                 dialogue
-                    .update(State::NewGameSetup {
-                        players: updated.clone(),
-                    })
+                    .update(State::NewGameSetup { players: updated.clone() })
                     .await?;
                 let all_players = queries::get_all_active_players(&pool).await?;
-                send_setup(&bot, chat_id, &updated, &all_players).await?;
+                edit_to_setup(&bot, chat_id, msg_id, &updated, &all_players).await?;
             }
         }
 
-        // ── keep (cancel remove) ──────────────────────────────────────────────
+        // ── Keep (cancel remove) ──────────────────────────────────────────────
         ["player", "keep"] => {
             let all_players = queries::get_all_active_players(&pool).await?;
-            send_setup(&bot, chat_id, &players, &all_players).await?;
+            edit_to_setup(&bot, chat_id, msg_id, &players, &all_players).await?;
         }
 
         _ => {}
@@ -264,37 +263,68 @@ pub async fn handle_setup_callback(
     Ok(())
 }
 
-// ── Step 4.3: known players callback ─────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Known players callbacks (State::NewGameKnownPlayers)
+// ---------------------------------------------------------------------------
+
+fn show_known_players_in_msg<'a>(
+    bot: &'a Bot,
+    chat_id: teloxide::types::ChatId,
+    msg_id: MessageId,
+    added_ids: &'a [i64],
+    all_players: &'a [Player],
+    page: u32,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = HandlerResult> + Send + 'a>> {
+    Box::pin(async move {
+        let available: Vec<&Player> = all_players
+            .iter()
+            .filter(|p| !added_ids.contains(&p.id))
+            .collect();
+        let per_page: usize = 8;
+        let total_pages = ((available.len() as f32) / per_page as f32).ceil() as u32;
+        let total_pages = total_pages.max(1);
+        let start = (page as usize) * per_page;
+        let page_players: Vec<&Player> =
+            available.into_iter().skip(start).take(per_page).collect();
+
+        let kb = keyboards::new_game::known_players_keyboard(&page_players, page, total_pages);
+        let _ = bot
+            .edit_message_text(
+                chat_id,
+                msg_id,
+                format!("Select a player (page {}/{}):", page + 1, total_pages),
+            )
+            .reply_markup(kb)
+            .await;
+        Ok(())
+    })
+}
 
 pub async fn handle_known_players_callback(
     bot: Bot,
     dialogue: MyDialogue,
     q: CallbackQuery,
     pool: SqlitePool,
-    players: Vec<i64>,
-    _page: u32,
+    (players, _page): (Vec<i64>, u32),
 ) -> HandlerResult {
     bot.answer_callback_query(&q.id).await?;
 
-    let data = q.data.as_deref().unwrap_or("");
-    let chat_id = match q.message.as_ref() {
-        Some(m) => m.chat().id,
+    let (chat_id, msg_id) = match q_msg(&q) {
+        Some(v) => v,
         None => return Ok(()),
     };
 
+    let data = q.data.as_deref().unwrap_or("");
     let parts: Vec<&str> = data.splitn(3, ':').collect();
 
     match parts.as_slice() {
         ["known", "page", n_str] => {
             if let Ok(n) = n_str.parse::<u32>() {
                 let all_players = queries::get_all_active_players(&pool).await?;
+                show_known_players_in_msg(&bot, chat_id, msg_id, &players, &all_players, n).await?;
                 dialogue
-                    .update(State::NewGameKnownPlayers {
-                        players: players.clone(),
-                        page: n,
-                    })
+                    .update(State::NewGameKnownPlayers { players, page: n })
                     .await?;
-                show_known_players_page(&bot, chat_id, &players, &all_players, n).await?;
             }
         }
 
@@ -305,28 +335,22 @@ pub async fn handle_known_players_callback(
                     updated.push(player_id);
                 }
                 dialogue
-                    .update(State::NewGameSetup {
-                        players: updated.clone(),
-                    })
+                    .update(State::NewGameSetup { players: updated.clone() })
                     .await?;
                 let all_players = queries::get_all_active_players(&pool).await?;
-                send_setup(&bot, chat_id, &updated, &all_players).await?;
+                edit_to_setup(&bot, chat_id, msg_id, &updated, &all_players).await?;
             }
         }
 
         ["known", "back"] => {
             dialogue
-                .update(State::NewGameSetup {
-                    players: players.clone(),
-                })
+                .update(State::NewGameSetup { players: players.clone() })
                 .await?;
             let all_players = queries::get_all_active_players(&pool).await?;
-            send_setup(&bot, chat_id, &players, &all_players).await?;
+            edit_to_setup(&bot, chat_id, msg_id, &players, &all_players).await?;
         }
 
-        ["known", "noop"] => {
-            // page indicator button pressed; nothing to do
-        }
+        ["known", "noop"] => {}
 
         _ => {}
     }

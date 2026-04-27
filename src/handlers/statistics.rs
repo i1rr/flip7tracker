@@ -1,22 +1,35 @@
 use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
+use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode};
 use sqlx::SqlitePool;
 use crate::handlers::{HandlerResult, MyDialogue, State};
 use crate::db::queries;
 use crate::keyboards;
 
+// ---------------------------------------------------------------------------
+// Render helpers
+// ---------------------------------------------------------------------------
+
 pub async fn show_stats(bot: &Bot, chat_id: ChatId, pool: &SqlitePool) -> HandlerResult {
-    show_stats_page(bot, chat_id, pool, 0).await
+    let msg = bot.send_message(chat_id, "Loading…").await?;
+    show_stats_in_msg(bot, chat_id, msg.id, pool, 0).await
 }
 
-async fn show_stats_page(bot: &Bot, chat_id: ChatId, pool: &SqlitePool, page: u32) -> HandlerResult {
+pub async fn show_stats_in_msg(
+    bot: &Bot,
+    chat_id: ChatId,
+    msg_id: MessageId,
+    pool: &SqlitePool,
+    page: u32,
+) -> HandlerResult {
     let all_stats = queries::get_all_stats(pool).await?;
     if all_stats.is_empty() {
-        bot.send_message(chat_id, "No statistics yet. Finish some games first!")
-            .reply_markup(InlineKeyboardMarkup::new(vec![vec![
-                InlineKeyboardButton::callback("← Back", "stats:back"),
-            ]]))
-            .await?;
+        let kb = InlineKeyboardMarkup::new(vec![vec![
+            InlineKeyboardButton::callback("← Back", "stats:back"),
+        ]]);
+        let _ = bot
+            .edit_message_text(chat_id, msg_id, "No statistics yet. Finish some games first!")
+            .reply_markup(kb)
+            .await;
         return Ok(());
     }
 
@@ -47,9 +60,8 @@ async fn show_stats_page(bot: &Bot, chat_id: ChatId, pool: &SqlitePool, page: u3
         ));
     }
 
-    let full_text = format!("{}{}{}{}", header, col_header, separator, rows_text);
+    let full_text = format!("<pre>{}{}{}{}</pre>", header, col_header, separator, rows_text);
 
-    // Player buttons
     let mut btn_rows: Vec<Vec<InlineKeyboardButton>> = vec![];
     for chunk in page_stats.chunks(3) {
         btn_rows.push(chunk.iter().map(|s| {
@@ -57,7 +69,6 @@ async fn show_stats_page(bot: &Bot, chat_id: ChatId, pool: &SqlitePool, page: u3
         }).collect());
     }
 
-    // Navigation
     let mut nav_row = vec![];
     if page > 0 {
         nav_row.push(InlineKeyboardButton::callback("← Prev", format!("stats:page:{}", page - 1)));
@@ -68,12 +79,37 @@ async fn show_stats_page(bot: &Bot, chat_id: ChatId, pool: &SqlitePool, page: u3
     if !nav_row.is_empty() { btn_rows.push(nav_row); }
     btn_rows.push(vec![InlineKeyboardButton::callback("← Back", "stats:back")]);
 
-    bot.send_message(chat_id, format!("<pre>{}</pre>", full_text))
+    let _ = bot
+        .edit_message_text(chat_id, msg_id, full_text)
         .parse_mode(ParseMode::Html)
         .reply_markup(InlineKeyboardMarkup::new(btn_rows))
-        .await?;
+        .await;
     Ok(())
 }
+
+async fn show_player_detail_in_msg(
+    bot: &Bot,
+    chat_id: ChatId,
+    msg_id: MessageId,
+    pool: &SqlitePool,
+    player_id: i64,
+) -> HandlerResult {
+    let stats = queries::get_player_stats(pool, player_id).await?;
+    let text = format!(
+        "👤 {}\n\nGames played:   {}\nWins:            {}  ({:.0}%)\nLosses:          {}\nHighest score:  {} pts\nAvg per game:   {:.0} pts\nTotal pts ever: {} pts\nRating:         {:.0}",
+        stats.player_name, stats.games, stats.wins, stats.win_rate * 100.0,
+        stats.losses, stats.highest_score, stats.avg_score, stats.total_points, stats.rating
+    );
+    let kb = InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback("← Back to Stats", "stats:back_to_list"),
+    ]]);
+    let _ = bot.edit_message_text(chat_id, msg_id, text).reply_markup(kb).await;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Callback handlers
+// ---------------------------------------------------------------------------
 
 pub async fn handle_stats_callback(
     bot: Bot,
@@ -82,29 +118,32 @@ pub async fn handle_stats_callback(
     pool: SqlitePool,
 ) -> HandlerResult {
     bot.answer_callback_query(&q.id).await?;
-    let data = q.data.as_deref().unwrap_or("");
-    let chat_id = match q.message.as_ref() {
-        Some(m) => m.chat().id,
+    let (chat_id, msg_id) = match q.message.as_ref().and_then(|m| {
+        m.regular_message().map(|r| (m.chat().id, r.id))
+    }) {
+        Some(v) => v,
         None => return Ok(()),
     };
+    let data = q.data.as_deref().unwrap_or("");
     let parts: Vec<&str> = data.split(':').collect();
     match parts.as_slice() {
         ["stats", "player", pid_str] => {
             if let Ok(player_id) = pid_str.parse::<i64>() {
                 dialogue.update(State::StatsPlayerDetail { player_id }).await?;
-                show_player_detail(&bot, chat_id, &pool, player_id).await?;
+                show_player_detail_in_msg(&bot, chat_id, msg_id, &pool, player_id).await?;
             }
         }
         ["stats", "page", n_str] => {
             if let Ok(n) = n_str.parse::<u32>() {
-                show_stats_page(&bot, chat_id, &pool, n).await?;
+                show_stats_in_msg(&bot, chat_id, msg_id, &pool, n).await?;
             }
         }
         ["stats", "back"] => {
             dialogue.update(State::MainMenu).await?;
-            bot.send_message(chat_id, "Main menu:")
+            let _ = bot
+                .edit_message_text(chat_id, msg_id, "Welcome to Flip7! Choose an option:")
                 .reply_markup(keyboards::menu::main_menu_keyboard())
-                .await?;
+                .await;
         }
         _ => {}
     }
@@ -119,30 +158,15 @@ pub async fn handle_player_detail_callback(
     _player_id: i64,
 ) -> HandlerResult {
     bot.answer_callback_query(&q.id).await?;
-    let data = q.data.as_deref().unwrap_or("");
-    let chat_id = match q.message.as_ref() {
-        Some(m) => m.chat().id,
+    let (chat_id, msg_id) = match q.message.as_ref().and_then(|m| {
+        m.regular_message().map(|r| (m.chat().id, r.id))
+    }) {
+        Some(v) => v,
         None => return Ok(()),
     };
-    if data == "stats:back_to_list" {
+    if q.data.as_deref() == Some("stats:back_to_list") {
         dialogue.update(State::StatsView).await?;
-        show_stats(&bot, chat_id, &pool).await?;
+        show_stats_in_msg(&bot, chat_id, msg_id, &pool, 0).await?;
     }
-    Ok(())
-}
-
-async fn show_player_detail(bot: &Bot, chat_id: ChatId, pool: &SqlitePool, player_id: i64) -> HandlerResult {
-    let stats = queries::get_player_stats(pool, player_id).await?;
-    let text = format!(
-        "👤 {}\n\nGames played:   {}\nWins:            {}  ({:.0}%)\nLosses:          {}\nHighest score:  {} pts\nAvg per game:   {:.0} pts\nTotal pts ever: {} pts\nRating:         {:.0}",
-        stats.player_name, stats.games, stats.wins, stats.win_rate * 100.0,
-        stats.losses, stats.highest_score, stats.avg_score, stats.total_points, stats.rating
-    );
-    let kb = InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("← Back to Stats", "stats:back_to_list"),
-    ]]);
-    bot.send_message(chat_id, text)
-        .reply_markup(kb)
-        .await?;
     Ok(())
 }

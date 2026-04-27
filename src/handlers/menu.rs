@@ -21,18 +21,25 @@ pub async fn handle_cancel(bot: Bot, dialogue: MyDialogue, msg: Message) -> Hand
 }
 
 pub async fn handle_help(bot: Bot, msg: Message) -> HandlerResult {
-    let help_text = "Flip7 Bot - Commands:\n\
-        /start or /menu - Main menu\n\
-        /scoreboard - Re-send scoreboard to bottom of chat\n\
-        /cancel - Cancel current action\n\
-        /help - Show this message\n\n\
+    let help_text = "Flip7 Bot commands:\n\
+        /start or /menu — Main menu\n\
+        /scoreboard — Re-send scoreboard to bottom of chat\n\
+        /cancel — Cancel current action\n\
+        /help — Show this message\n\n\
         The host controls the game. Add players, start, then enter scores after each hand.";
     bot.send_message(msg.chat.id, help_text).await?;
     Ok(())
 }
 
 pub async fn handle_unknown_message(_bot: Bot, _msg: Message) -> HandlerResult {
-    // Silently ignore unknown messages in non-text-entry states
+    Ok(())
+}
+
+pub async fn handle_unknown_callback(bot: Bot, q: CallbackQuery) -> HandlerResult {
+    bot.answer_callback_query(&q.id)
+        .text("Session expired. Send /menu to restart.")
+        .show_alert(false)
+        .await?;
     Ok(())
 }
 
@@ -44,25 +51,39 @@ pub async fn handle_main_menu_callback(
 ) -> HandlerResult {
     bot.answer_callback_query(&q.id).await?;
     let data = q.data.as_deref().unwrap_or("");
-    let chat_id = match q.message.as_ref() {
-        Some(m) => m.chat().id,
+    let (chat_id, msg_id) = match q.message.as_ref().and_then(|m| {
+        m.regular_message().map(|r| (m.chat().id, r.id))
+    }) {
+        Some(v) => v,
         None => return Ok(()),
     };
+
     match data {
         "menu:new_game" => {
             dialogue.update(State::NewGameSetup { players: vec![] }).await?;
-            bot.send_message(chat_id, "New game setup:\nPlayers added: (none)")
+            let _ = bot
+                .edit_message_text(chat_id, msg_id, "New game setup:\nPlayers added: (none)")
                 .reply_markup(keyboards::new_game::setup_keyboard(&[], &[]))
-                .await?;
+                .await;
         }
         "menu:load_game" => {
             dialogue.update(State::LoadGameList).await?;
-            bot.send_message(chat_id, "Loading games...").await?;
-            crate::handlers::load_game::show_load_game_list(&bot, chat_id, &pool).await?;
+            crate::handlers::load_game::show_load_game_list_in_msg(&bot, chat_id, msg_id, &pool).await?;
         }
         "menu:stats" => {
             dialogue.update(State::StatsView).await?;
-            crate::handlers::statistics::show_stats(&bot, chat_id, &pool).await?;
+            crate::handlers::statistics::show_stats_in_msg(&bot, chat_id, msg_id, &pool, 0).await?;
+        }
+        // Win-screen buttons arrive here (state is MainMenu after a finished game)
+        "game:new" | "game:home" => {
+            let _ = bot
+                .edit_message_text(chat_id, msg_id, "Welcome to Flip7! Choose an option:")
+                .reply_markup(keyboards::menu::main_menu_keyboard())
+                .await;
+        }
+        "game:stats" => {
+            dialogue.update(State::StatsView).await?;
+            crate::handlers::statistics::show_stats_in_msg(&bot, chat_id, msg_id, &pool, 0).await?;
         }
         _ => {}
     }
