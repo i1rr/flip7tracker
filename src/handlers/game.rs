@@ -50,7 +50,7 @@ async fn edit_to_scoreboard(
     let players = queries::get_game_players(pool, game_id).await?;
     let scores = queries::get_game_scores(pool, game_id).await?;
     let text = scoreboard::render_scoreboard(&scores, &players, game_id);
-    let kb = keyboards::game::game_keyboard(game_id);
+    let kb = keyboards::game::game_keyboard(game_id, &players);
     let _ = bot
         .edit_message_text(chat_id, msg_id, text)
         .parse_mode(ParseMode::Html)
@@ -111,7 +111,7 @@ pub async fn handle_scoreboard_command(
     let players = queries::get_game_players(&pool, game.id).await?;
     let scores = queries::get_game_scores(&pool, game.id).await?;
     let text = scoreboard::render_scoreboard(&scores, &players, game.id);
-    let kb = keyboards::game::game_keyboard(game.id);
+    let kb = keyboards::game::game_keyboard(game.id, &players);
     if let Some(old_id) = game.message_id {
         let _ = bot.delete_message(chat_id, MessageId(old_id as i32)).await;
     }
@@ -135,23 +135,39 @@ pub async fn handle_game_callback(
     pool: SqlitePool,
     game_id: i64,
 ) -> HandlerResult {
-    bot.answer_callback_query(&q.id).await?;
+    log::info!("game_callback game_id={}: {:?}", game_id, q.data);
     let (chat_id, msg_id) = match q_msg(&q) {
         Some(v) => v,
-        None => return Ok(()),
+        None => {
+            bot.answer_callback_query(&q.id).await?;
+            return Ok(());
+        }
     };
     let data = q.data.as_deref().unwrap_or("");
 
-    // ── Add Score ────────────────────────────────────────────────────────────
-    if data == format!("game:add_score:{}", game_id) {
-        let players = queries::get_game_players(&pool, game_id).await?;
-        let kb = keyboards::game::player_select_keyboard(game_id, &players);
-        let _ = bot
-            .edit_message_text(chat_id, msg_id, "Select a player to add score for:")
-            .reply_markup(kb)
-            .await;
-        dialogue.update(State::GameAddScoreSelectPlayer { game_id }).await?;
-        return Ok(());
+    // ── Player tapped — go straight to score entry ────────────────────────────
+    let score_prefix = format!("score:player:{}:", game_id);
+    if let Some(rest) = data.strip_prefix(&score_prefix) {
+        if let Ok(player_id) = rest.parse::<i64>() {
+            bot.answer_callback_query(&q.id).await?;
+            let players = queries::get_game_players(&pool, game_id).await?;
+            let player_name = players
+                .iter()
+                .find(|p| p.id == player_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            let _ = bot
+                .edit_message_text(
+                    chat_id,
+                    msg_id,
+                    format!("Enter score for {} (0–999):", player_name),
+                )
+                .await;
+            dialogue
+                .update(State::GameAddScoreEnterPoints { game_id, player_id })
+                .await?;
+            return Ok(());
+        }
     }
 
     // ── Edit Last ────────────────────────────────────────────────────────────
@@ -172,6 +188,7 @@ pub async fn handle_game_callback(
                     .await?;
             }
             Some(entry) => {
+                bot.answer_callback_query(&q.id).await?;
                 let players = queries::get_game_players(&pool, game_id).await?;
                 let player_name = players
                     .iter()
@@ -195,6 +212,7 @@ pub async fn handle_game_callback(
 
     // ── End Game ─────────────────────────────────────────────────────────────
     if data == format!("game:end:{}", game_id) {
+        bot.answer_callback_query(&q.id).await?;
         let kb = keyboards::game::end_confirm_keyboard(game_id);
         let _ = bot
             .edit_message_text(chat_id, msg_id, "End game without declaring a winner?")
@@ -205,12 +223,14 @@ pub async fn handle_game_callback(
 
     // ── End Game: Cancel ─────────────────────────────────────────────────────
     if data == format!("game:end_cancel:{}", game_id) {
+        bot.answer_callback_query(&q.id).await?;
         edit_to_scoreboard(&bot, &pool, game_id, chat_id, msg_id).await?;
         return Ok(());
     }
 
     // ── End Game: Confirm ────────────────────────────────────────────────────
     if data == format!("game:end_confirm:{}", game_id) {
+        bot.answer_callback_query(&q.id).await?;
         let game_players = queries::get_game_players(&pool, game_id).await?;
         let last_ids: Vec<i64> = game_players.iter().map(|p| p.id).collect();
         queries::finish_game(&pool, game_id, None).await?;
@@ -225,6 +245,7 @@ pub async fn handle_game_callback(
 
     // ── Win screen / post-game navigation ────────────────────────────────────
     if data == "game:new" || data == "game:home" {
+        bot.answer_callback_query(&q.id).await?;
         let _ = bot.delete_message(chat_id, msg_id).await;
         dialogue.update(State::MainMenu).await?;
         bot.send_message(chat_id, "Welcome to Flip7! Choose an option:")
@@ -234,63 +255,14 @@ pub async fn handle_game_callback(
     }
 
     if data == "game:stats" {
+        bot.answer_callback_query(&q.id).await?;
         let _ = bot.delete_message(chat_id, msg_id).await;
         dialogue.update(State::StatsView).await?;
         crate::handlers::statistics::show_stats(&bot, chat_id, &pool).await?;
         return Ok(());
     }
 
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// State::GameAddScoreSelectPlayer callbacks
-// ---------------------------------------------------------------------------
-pub async fn handle_select_player_callback(
-    bot: Bot,
-    dialogue: MyDialogue,
-    q: CallbackQuery,
-    pool: SqlitePool,
-    game_id: i64,
-) -> HandlerResult {
     bot.answer_callback_query(&q.id).await?;
-    let (chat_id, msg_id) = match q_msg(&q) {
-        Some(v) => v,
-        None => return Ok(()),
-    };
-    let data = q.data.as_deref().unwrap_or("");
-
-    // ── Cancel ───────────────────────────────────────────────────────────────
-    if data == "score:cancel" {
-        edit_to_scoreboard(&bot, &pool, game_id, chat_id, msg_id).await?;
-        dialogue.update(State::GameActive { game_id }).await?;
-        return Ok(());
-    }
-
-    // ── Player selected ──────────────────────────────────────────────────────
-    let prefix = format!("score:player:{}:", game_id);
-    if let Some(rest) = data.strip_prefix(&prefix) {
-        if let Ok(player_id) = rest.parse::<i64>() {
-            let players = queries::get_game_players(&pool, game_id).await?;
-            let player_name = players
-                .iter()
-                .find(|p| p.id == player_id)
-                .map(|p| p.name.clone())
-                .unwrap_or_else(|| "Unknown".to_string());
-            let _ = bot
-                .edit_message_text(
-                    chat_id,
-                    msg_id,
-                    format!("Enter score for {} (0–999):", player_name),
-                )
-                .await;
-            dialogue
-                .update(State::GameAddScoreEnterPoints { game_id, player_id })
-                .await?;
-            return Ok(());
-        }
-    }
-
     Ok(())
 }
 
@@ -346,7 +318,6 @@ pub async fn handle_enter_points(
             p.id != win_player_id && *scores.get(&p.id).unwrap_or(&0) >= 200
         });
 
-        // Delete the "Enter score for X:" prompt
         let game_vec = queries::get_unfinished_games(&pool, chat_id.0).await;
         if let Ok(gv) = game_vec {
             if let Some(g) = gv.into_iter().find(|g| g.id == game_id) {
@@ -365,7 +336,7 @@ pub async fn handle_enter_points(
         let game_vec = queries::get_unfinished_games(&pool, chat_id.0).await?;
         if let Some(game) = game_vec.into_iter().find(|g| g.id == game_id) {
             let board_text = scoreboard::render_scoreboard(&scores, &players, game_id);
-            let kb = keyboards::game::game_keyboard(game_id);
+            let kb = keyboards::game::game_keyboard(game_id, &players);
             push_scoreboard(&bot, &pool, &game, &board_text, kb).await;
         }
         dialogue.update(State::GameActive { game_id }).await?;
@@ -398,14 +369,13 @@ pub async fn handle_edit_confirm_callback(
         let players = queries::get_game_players(&pool, game_id).await?;
         let scores = queries::get_game_scores(&pool, game_id).await?;
         let board_text = scoreboard::render_scoreboard(&scores, &players, game_id);
-        let kb = keyboards::game::game_keyboard(game_id);
+        let kb = keyboards::game::game_keyboard(game_id, &players);
         let _ = bot
             .edit_message_text(chat_id, msg_id, board_text)
             .parse_mode(ParseMode::Html)
             .reply_markup(kb)
             .await;
 
-        // Update message_id in DB (it's the same message, but keep it consistent)
         queries::update_game_message_id(&pool, game_id, msg_id.0 as i64).await?;
         dialogue.update(State::GameActive { game_id }).await?;
         return Ok(());

@@ -110,11 +110,14 @@ pub async fn handle_setup_callback(
     pool: SqlitePool,
     players: Vec<i64>,
 ) -> HandlerResult {
-    bot.answer_callback_query(&q.id).await?;
+    log::info!("setup_callback players={:?}: {:?}", players, q.data);
 
     let (chat_id, msg_id) = match q_msg(&q) {
         Some(v) => v,
-        None => return Ok(()),
+        None => {
+            bot.answer_callback_query(&q.id).await?;
+            return Ok(());
+        }
     };
 
     let data = q.data.as_deref().unwrap_or("");
@@ -123,6 +126,7 @@ pub async fn handle_setup_callback(
     match parts.as_slice() {
         // ── Add new player by typing ──────────────────────────────────────────
         ["setup", "add_new"] => {
+            bot.answer_callback_query(&q.id).await?;
             let _ = bot
                 .edit_message_text(chat_id, msg_id, "Enter the new player's name:")
                 .await;
@@ -148,6 +152,7 @@ pub async fn handle_setup_callback(
                     .await?;
                 return Ok(());
             }
+            bot.answer_callback_query(&q.id).await?;
             show_known_players_in_msg(
                 &bot, chat_id, msg_id, &players, &all_players, 0,
             )
@@ -176,6 +181,8 @@ pub async fn handle_setup_callback(
                 return Ok(());
             }
 
+            bot.answer_callback_query(&q.id).await?;
+
             // Delete the setup message
             let _ = bot.delete_message(chat_id, msg_id).await;
 
@@ -193,7 +200,7 @@ pub async fn handle_setup_callback(
             let scores = std::collections::HashMap::new();
             let scoreboard_text =
                 scoreboard::render_scoreboard(&scores, &game_players, game.id);
-            let kb = keyboards::game::game_keyboard(game.id);
+            let kb = keyboards::game::game_keyboard(game.id, &game_players);
             let sent = bot
                 .send_message(chat_id, &scoreboard_text)
                 .parse_mode(ParseMode::Html)
@@ -206,6 +213,7 @@ pub async fn handle_setup_callback(
 
         // ── Back to main menu ─────────────────────────────────────────────────
         ["setup", "back"] => {
+            bot.answer_callback_query(&q.id).await?;
             let _ = bot
                 .edit_message_text(chat_id, msg_id, "Welcome to Flip7! Choose an option:")
                 .reply_markup(keyboards::menu::main_menu_keyboard())
@@ -223,6 +231,7 @@ pub async fn handle_setup_callback(
 
         // ── Remove player (confirm) ───────────────────────────────────────────
         ["player", "remove", player_id_str] => {
+            bot.answer_callback_query(&q.id).await?;
             if let Ok(player_id) = player_id_str.parse::<i64>() {
                 let all_players = queries::get_all_active_players(&pool).await?;
                 let name = all_players
@@ -240,6 +249,7 @@ pub async fn handle_setup_callback(
 
         // ── Confirm remove ────────────────────────────────────────────────────
         ["player", "confirm_remove", player_id_str] => {
+            bot.answer_callback_query(&q.id).await?;
             if let Ok(player_id) = player_id_str.parse::<i64>() {
                 let updated: Vec<i64> =
                     players.into_iter().filter(|&id| id != player_id).collect();
@@ -253,11 +263,14 @@ pub async fn handle_setup_callback(
 
         // ── Keep (cancel remove) ──────────────────────────────────────────────
         ["player", "keep"] => {
+            bot.answer_callback_query(&q.id).await?;
             let all_players = queries::get_all_active_players(&pool).await?;
             edit_to_setup(&bot, chat_id, msg_id, &players, &all_players).await?;
         }
 
-        _ => {}
+        _ => {
+            bot.answer_callback_query(&q.id).await?;
+        }
     }
 
     Ok(())

@@ -36,6 +36,7 @@ pub async fn handle_unknown_message(_bot: Bot, _msg: Message) -> HandlerResult {
 }
 
 pub async fn handle_unknown_callback(bot: Bot, q: CallbackQuery) -> HandlerResult {
+    log::warn!("unhandled callback: {:?}", q.data);
     bot.answer_callback_query(&q.id)
         .text("Session expired. Send /menu to restart.")
         .show_alert(false)
@@ -49,6 +50,7 @@ pub async fn handle_main_menu_callback(
     q: CallbackQuery,
     pool: SqlitePool,
 ) -> HandlerResult {
+    log::info!("main_menu_callback: {:?}", q.data);
     bot.answer_callback_query(&q.id).await?;
     let data = q.data.as_deref().unwrap_or("");
     let (chat_id, msg_id) = match q.message.as_ref().and_then(|m| {
@@ -93,7 +95,12 @@ pub async fn handle_main_menu_callback(
             dialogue.update(State::StatsView).await?;
             crate::handlers::statistics::show_stats_in_msg(&bot, chat_id, msg_id, &pool, 0).await?;
         }
-        _ => {}
+        _ => {
+            bot.answer_callback_query(&q.id)
+                .text("Session expired — send /menu to start over.")
+                .show_alert(true)
+                .await?;
+        }
     }
     Ok(())
 }

@@ -1,14 +1,26 @@
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 use crate::db::models::Player;
 
-pub fn game_keyboard(game_id: i64) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![
-        vec![
-            InlineKeyboardButton::callback("+ Add Score", format!("game:add_score:{}", game_id)),
-            InlineKeyboardButton::callback("✏️ Edit Last", format!("game:edit:{}", game_id)),
-        ],
-        vec![InlineKeyboardButton::callback("🚩 End Game", format!("game:end:{}", game_id))],
-    ])
+pub fn game_keyboard(game_id: i64, players: &[Player]) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = players
+        .chunks(2)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(|p| {
+                    InlineKeyboardButton::callback(
+                        &p.name,
+                        format!("score:player:{}:{}", game_id, p.id),
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    rows.push(vec![
+        InlineKeyboardButton::callback("✏️ Edit Last", format!("game:edit:{}", game_id)),
+        InlineKeyboardButton::callback("🚩 End Game", format!("game:end:{}", game_id)),
+    ]);
+    InlineKeyboardMarkup::new(rows)
 }
 
 pub fn win_keyboard() -> InlineKeyboardMarkup {
@@ -19,20 +31,6 @@ pub fn win_keyboard() -> InlineKeyboardMarkup {
         ],
         vec![InlineKeyboardButton::callback("🏠 Main Menu", "game:home")],
     ])
-}
-
-pub fn player_select_keyboard(game_id: i64, players: &[Player]) -> InlineKeyboardMarkup {
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = players
-        .iter()
-        .map(|p| {
-            vec![InlineKeyboardButton::callback(
-                &p.name,
-                format!("score:player:{}:{}", game_id, p.id),
-            )]
-        })
-        .collect();
-    rows.push(vec![InlineKeyboardButton::callback("← Cancel", "score:cancel")]);
-    InlineKeyboardMarkup::new(rows)
 }
 
 pub fn edit_confirm_keyboard(game_id: i64) -> InlineKeyboardMarkup {

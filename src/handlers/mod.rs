@@ -21,7 +21,6 @@ pub enum State {
     NewGameTypingName { players: Vec<i64>, setup_msg_id: i32 },
     NewGameKnownPlayers { players: Vec<i64>, page: u32 },
     GameActive { game_id: i64 },
-    GameAddScoreSelectPlayer { game_id: i64 },
     GameAddScoreEnterPoints { game_id: i64, player_id: i64 },
     GameEditConfirm { game_id: i64 },
     LoadGameList,
@@ -76,10 +75,6 @@ pub fn build_handler() -> UpdateHandler<Box<dyn std::error::Error + Send + Sync 
                 .endpoint(new_game::handle_known_players_callback),
         )
         .branch(case![State::GameActive { game_id }].endpoint(game::handle_game_callback))
-        .branch(
-            case![State::GameAddScoreSelectPlayer { game_id }]
-                .endpoint(game::handle_select_player_callback),
-        )
         .branch(
             case![State::GameEditConfirm { game_id }]
                 .endpoint(game::handle_edit_confirm_callback),

@@ -62,7 +62,7 @@ pub async fn handle_load_callback(
                 let players = queries::get_game_players(&pool, game_id).await?;
                 let scores = queries::get_game_scores(&pool, game_id).await?;
                 let text = scoreboard::render_scoreboard(&scores, &players, game_id);
-                let kb = keyboards::game::game_keyboard(game_id);
+                let kb = keyboards::game::game_keyboard(game_id, &players);
                 // Delete the load-list message and send fresh scoreboard at bottom
                 let _ = bot.delete_message(chat_id, msg_id).await;
                 let sent = bot
