@@ -272,7 +272,7 @@ pub async fn handle_known_players_callback(
     q: CallbackQuery,
     pool: SqlitePool,
     players: Vec<i64>,
-    page: u32,
+    _page: u32,
 ) -> HandlerResult {
     bot.answer_callback_query(&q.id).await?;
 

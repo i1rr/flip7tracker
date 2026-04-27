@@ -1,0 +1,17 @@
+services:
+  flip7bot:
+    build: .
+    restart: on-failure
+    env_file: .env
+    user: root
+    volumes:
+      - flip7_data:/data
+    healthcheck:
+      test: ["CMD", "pgrep", "flip7bot"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  flip7_data:
