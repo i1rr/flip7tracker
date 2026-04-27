@@ -1,0 +1,18 @@
+[package]
+name = "flip7bot"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+
+[dependencies]
+teloxide = { version = "0.13", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "migrate", "chrono"] }
+# Force bundled libsqlite3 for static linking (required for musl/Alpine Docker builds)
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+dotenvy = "0.15"
+envy = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+log = "0.4"
+env_logger = "0.11"
