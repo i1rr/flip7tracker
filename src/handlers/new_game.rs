@@ -18,7 +18,7 @@ fn q_msg(q: &CallbackQuery) -> Option<(teloxide::types::ChatId, MessageId)> {
     })
 }
 
-fn setup_text(players: &[i64], all_players: &[Player]) -> String {
+pub fn setup_text(players: &[i64], all_players: &[Player]) -> String {
     let names: Vec<&str> = players
         .iter()
         .filter_map(|id| all_players.iter().find(|p| p.id == *id))

@@ -59,11 +59,16 @@ pub async fn handle_main_menu_callback(
     };
 
     match data {
-        "menu:new_game" => {
-            dialogue.update(State::NewGameSetup { players: vec![] }).await?;
+        "menu:new_game" | "game:new" => {
+            let all_players = crate::db::queries::get_all_active_players(&pool).await?;
+            let last_ids = crate::db::queries::get_last_players(&pool, chat_id.0).await.unwrap_or_default();
+            let active_ids: std::collections::HashSet<i64> = all_players.iter().map(|p| p.id).collect();
+            let players: Vec<i64> = last_ids.into_iter().filter(|id| active_ids.contains(id)).collect();
+            let text = crate::handlers::new_game::setup_text(&players, &all_players);
+            dialogue.update(State::NewGameSetup { players: players.clone() }).await?;
             let _ = bot
-                .edit_message_text(chat_id, msg_id, "New game setup:\nPlayers added: (none)")
-                .reply_markup(keyboards::new_game::setup_keyboard(&[], &[]))
+                .edit_message_text(chat_id, msg_id, text)
+                .reply_markup(keyboards::new_game::setup_keyboard(&players, &all_players))
                 .await;
         }
         "menu:load_game" => {
@@ -74,8 +79,11 @@ pub async fn handle_main_menu_callback(
             dialogue.update(State::StatsView).await?;
             crate::handlers::statistics::show_stats_in_msg(&bot, chat_id, msg_id, &pool, 0).await?;
         }
-        // Win-screen buttons arrive here (state is MainMenu after a finished game)
-        "game:new" | "game:home" => {
+        "menu:players" => {
+            dialogue.update(State::PlayersManage { page: 0 }).await?;
+            crate::handlers::players::show_players_in_msg(&bot, chat_id, msg_id, &pool, 0).await?;
+        }
+        "game:home" => {
             let _ = bot
                 .edit_message_text(chat_id, msg_id, "Welcome to Flip7! Choose an option:")
                 .reply_markup(keyboards::menu::main_menu_keyboard())

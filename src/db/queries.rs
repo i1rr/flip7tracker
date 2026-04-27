@@ -194,6 +194,51 @@ pub async fn get_player_stats(pool: &SqlitePool, player_id: i64) -> Result<Playe
     })
 }
 
+pub async fn rename_player(pool: &SqlitePool, player_id: i64, new_name: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE players SET name = ? WHERE id = ?")
+        .bind(new_name)
+        .bind(player_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn hard_delete_player(pool: &SqlitePool, player_id: i64) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM score_entries WHERE player_id = ?").bind(player_id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM game_players WHERE player_id = ?").bind(player_id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM chat_last_players WHERE player_id = ?").bind(player_id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE games SET winner_player_id = NULL WHERE winner_player_id = ?").bind(player_id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM players WHERE id = ?").bind(player_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn save_last_players(pool: &SqlitePool, chat_id: i64, player_ids: &[i64]) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM chat_last_players WHERE chat_id = ?")
+        .bind(chat_id)
+        .execute(pool)
+        .await?;
+    for &pid in player_ids {
+        sqlx::query("INSERT OR IGNORE INTO chat_last_players (chat_id, player_id) VALUES (?, ?)")
+            .bind(chat_id)
+            .bind(pid)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn get_last_players(pool: &SqlitePool, chat_id: i64) -> Result<Vec<i64>, sqlx::Error> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT player_id FROM chat_last_players WHERE chat_id = ?"
+    )
+    .bind(chat_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 pub async fn get_all_stats(pool: &SqlitePool) -> Result<Vec<PlayerStats>, sqlx::Error> {
     let rows: Vec<(i64, String, i64, i64, i64, i64)> = sqlx::query_as(
         "SELECT

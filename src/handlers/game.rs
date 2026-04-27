@@ -211,7 +211,10 @@ pub async fn handle_game_callback(
 
     // ── End Game: Confirm ────────────────────────────────────────────────────
     if data == format!("game:end_confirm:{}", game_id) {
+        let game_players = queries::get_game_players(&pool, game_id).await?;
+        let last_ids: Vec<i64> = game_players.iter().map(|p| p.id).collect();
         queries::finish_game(&pool, game_id, None).await?;
+        let _ = queries::save_last_players(&pool, chat_id.0, &last_ids).await;
         let _ = bot.delete_message(chat_id, msg_id).await;
         dialogue.update(State::MainMenu).await?;
         bot.send_message(chat_id, "Game over — no winner declared.")
@@ -330,6 +333,8 @@ pub async fn handle_enter_points(
 
     if let Some((win_player_id, win_score)) = winner {
         queries::finish_game(&pool, game_id, Some(win_player_id)).await?;
+        let last_ids: Vec<i64> = players.iter().map(|p| p.id).collect();
+        let _ = queries::save_last_players(&pool, chat_id.0, &last_ids).await;
 
         let win_name = players
             .iter()

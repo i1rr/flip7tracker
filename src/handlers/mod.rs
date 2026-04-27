@@ -7,6 +7,7 @@ pub mod game;
 pub mod load_game;
 pub mod menu;
 pub mod new_game;
+pub mod players;
 pub mod statistics;
 
 pub type MyDialogue = Dialogue<State, InMemStorage<State>>;
@@ -26,6 +27,9 @@ pub enum State {
     LoadGameList,
     StatsView,
     StatsPlayerDetail { player_id: i64 },
+    PlayersManage { page: u32 },
+    PlayersDeleteConfirm { player_id: i64 },
+    PlayersRenaming { player_id: i64, setup_msg_id: i32 },
 }
 
 #[derive(teloxide::utils::command::BotCommands, Clone)]
@@ -58,6 +62,10 @@ pub fn build_handler() -> UpdateHandler<Box<dyn std::error::Error + Send + Sync 
             case![State::GameAddScoreEnterPoints { game_id, player_id }]
                 .endpoint(game::handle_enter_points),
         )
+        .branch(
+            case![State::PlayersRenaming { player_id, setup_msg_id }]
+                .endpoint(players::handle_renaming_message),
+        )
         .branch(dptree::endpoint(menu::handle_unknown_message));
 
     let callback_handler = Update::filter_callback_query()
@@ -81,6 +89,14 @@ pub fn build_handler() -> UpdateHandler<Box<dyn std::error::Error + Send + Sync 
         .branch(
             case![State::StatsPlayerDetail { player_id }]
                 .endpoint(statistics::handle_player_detail_callback),
+        )
+        .branch(
+            case![State::PlayersManage { page }]
+                .endpoint(players::handle_players_callback),
+        )
+        .branch(
+            case![State::PlayersDeleteConfirm { player_id }]
+                .endpoint(players::handle_delete_confirm_callback),
         )
         .branch(dptree::endpoint(menu::handle_unknown_callback));
 
