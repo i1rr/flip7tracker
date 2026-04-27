@@ -28,13 +28,6 @@ pub async fn get_all_active_players(pool: &SqlitePool) -> Result<Vec<Player>, sq
     .await
 }
 
-pub async fn soft_delete_player(pool: &SqlitePool, player_id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE players SET is_deleted = 1 WHERE id = ?")
-        .bind(player_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
 
 pub async fn create_game(pool: &SqlitePool, chat_id: i64) -> Result<Game, sqlx::Error> {
     let result = sqlx::query("INSERT INTO games (chat_id) VALUES (?)")

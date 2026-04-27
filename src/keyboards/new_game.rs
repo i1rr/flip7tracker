@@ -50,6 +50,7 @@ pub fn known_players_keyboard(
     players: &[&Player],
     page: u32,
     total_pages: u32,
+    added_count: usize,
 ) -> InlineKeyboardMarkup {
     let mut rows: Vec<Vec<InlineKeyboardButton>> = vec![];
     for p in players {
@@ -82,16 +83,12 @@ pub fn known_players_keyboard(
         "\u{2190} Back to Setup",
         "known:back",
     )]);
+    if added_count >= 2 {
+        rows.push(vec![InlineKeyboardButton::callback(
+            "\u{25b6} Start Game",
+            "known:start",
+        )]);
+    }
 
     InlineKeyboardMarkup::new(rows)
-}
-
-pub fn confirm_remove_keyboard(player_id: i64) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback(
-            "Yes, Remove",
-            format!("player:confirm_remove:{}", player_id),
-        ),
-        InlineKeyboardButton::callback("Keep", "player:keep"),
-    ]])
 }

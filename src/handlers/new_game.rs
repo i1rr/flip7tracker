@@ -229,26 +229,8 @@ pub async fn handle_setup_callback(
                 .await?;
         }
 
-        // ── Remove player (confirm) ───────────────────────────────────────────
+        // ── Remove player (instant, no confirmation) ──────────────────────────
         ["player", "remove", player_id_str] => {
-            bot.answer_callback_query(&q.id).await?;
-            if let Ok(player_id) = player_id_str.parse::<i64>() {
-                let all_players = queries::get_all_active_players(&pool).await?;
-                let name = all_players
-                    .iter()
-                    .find(|p| p.id == player_id)
-                    .map(|p| p.name.clone())
-                    .unwrap_or_default();
-                let kb = keyboards::new_game::confirm_remove_keyboard(player_id);
-                let _ = bot
-                    .edit_message_text(chat_id, msg_id, format!("Remove {}?", name))
-                    .reply_markup(kb)
-                    .await;
-            }
-        }
-
-        // ── Confirm remove ────────────────────────────────────────────────────
-        ["player", "confirm_remove", player_id_str] => {
             bot.answer_callback_query(&q.id).await?;
             if let Ok(player_id) = player_id_str.parse::<i64>() {
                 let updated: Vec<i64> =
@@ -259,13 +241,6 @@ pub async fn handle_setup_callback(
                 let all_players = queries::get_all_active_players(&pool).await?;
                 edit_to_setup(&bot, chat_id, msg_id, &updated, &all_players).await?;
             }
-        }
-
-        // ── Keep (cancel remove) ──────────────────────────────────────────────
-        ["player", "keep"] => {
-            bot.answer_callback_query(&q.id).await?;
-            let all_players = queries::get_all_active_players(&pool).await?;
-            edit_to_setup(&bot, chat_id, msg_id, &players, &all_players).await?;
         }
 
         _ => {
@@ -296,17 +271,30 @@ fn show_known_players_in_msg<'a>(
         let per_page: usize = 8;
         let total_pages = ((available.len() as f32) / per_page as f32).ceil() as u32;
         let total_pages = total_pages.max(1);
+        let page = page.min(total_pages - 1);
         let start = (page as usize) * per_page;
         let page_players: Vec<&Player> =
             available.into_iter().skip(start).take(per_page).collect();
 
-        let kb = keyboards::new_game::known_players_keyboard(&page_players, page, total_pages);
-        let _ = bot
-            .edit_message_text(
-                chat_id,
-                msg_id,
-                format!("Select a player (page {}/{}):", page + 1, total_pages),
+        let added_count = added_ids.len();
+        let header = if added_count == 0 {
+            format!("Select a player (page {}/{}):", page + 1, total_pages)
+        } else {
+            format!(
+                "Select a player — {} added so far (page {}/{}):",
+                added_count,
+                page + 1,
+                total_pages
             )
+        };
+        let kb = keyboards::new_game::known_players_keyboard(
+            &page_players,
+            page,
+            total_pages,
+            added_count,
+        );
+        let _ = bot
+            .edit_message_text(chat_id, msg_id, header)
             .reply_markup(kb)
             .await;
         Ok(())
@@ -318,7 +306,7 @@ pub async fn handle_known_players_callback(
     dialogue: MyDialogue,
     q: CallbackQuery,
     pool: SqlitePool,
-    (players, _page): (Vec<i64>, u32),
+    (players, page): (Vec<i64>, u32),
 ) -> HandlerResult {
     bot.answer_callback_query(&q.id).await?;
 
@@ -347,12 +335,70 @@ pub async fn handle_known_players_callback(
                 if !updated.contains(&player_id) {
                     updated.push(player_id);
                 }
-                dialogue
-                    .update(State::NewGameSetup { players: updated.clone() })
-                    .await?;
                 let all_players = queries::get_all_active_players(&pool).await?;
-                edit_to_setup(&bot, chat_id, msg_id, &updated, &all_players).await?;
+                let remaining = all_players.iter().filter(|p| !updated.contains(&p.id)).count();
+                if remaining == 0 {
+                    // All known players added — return to setup
+                    dialogue
+                        .update(State::NewGameSetup { players: updated.clone() })
+                        .await?;
+                    edit_to_setup(&bot, chat_id, msg_id, &updated, &all_players).await?;
+                } else {
+                    // Stay on known players screen so user can keep adding
+                    dialogue
+                        .update(State::NewGameKnownPlayers { players: updated.clone(), page })
+                        .await?;
+                    show_known_players_in_msg(
+                        &bot, chat_id, msg_id, &updated, &all_players, page,
+                    )
+                    .await?;
+                }
             }
+        }
+
+        ["known", "start"] => {
+            if players.len() < 2 {
+                bot.answer_callback_query(&q.id)
+                    .text("Need at least 2 players to start.")
+                    .show_alert(true)
+                    .await?;
+                return Ok(());
+            }
+
+            let unfinished = queries::get_unfinished_games(&pool, chat_id.0).await?;
+            if !unfinished.is_empty() {
+                bot.answer_callback_query(&q.id)
+                    .text("You have an unfinished game. Load it or end it first.")
+                    .show_alert(true)
+                    .await?;
+                return Ok(());
+            }
+
+            let _ = bot.delete_message(chat_id, msg_id).await;
+
+            let game = queries::create_game(&pool, chat_id.0).await?;
+            for &pid in &players {
+                queries::add_player_to_game(&pool, game.id, pid).await?;
+            }
+
+            let all_players = queries::get_all_active_players(&pool).await?;
+            let game_players: Vec<Player> = all_players
+                .into_iter()
+                .filter(|p| players.contains(&p.id))
+                .collect();
+
+            let scores = std::collections::HashMap::new();
+            let scoreboard_text =
+                scoreboard::render_scoreboard(&scores, &game_players, game.id);
+            let kb = keyboards::game::game_keyboard(game.id, &game_players);
+            let sent = bot
+                .send_message(chat_id, &scoreboard_text)
+                .parse_mode(ParseMode::Html)
+                .reply_markup(kb)
+                .await?;
+
+            queries::update_game_message_id(&pool, game.id, sent.id.0 as i64).await?;
+            dialogue.update(State::GameActive { game_id: game.id }).await?;
         }
 
         ["known", "back"] => {

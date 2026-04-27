@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::FromRow;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow)]
 pub struct Player {
     pub id: i64,
@@ -9,6 +10,7 @@ pub struct Player {
     pub created_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow)]
 pub struct Game {
     pub id: i64,
@@ -19,12 +21,7 @@ pub struct Game {
     pub winner_player_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, FromRow)]
-pub struct GamePlayer {
-    pub game_id: i64,
-    pub player_id: i64,
-}
-
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow)]
 pub struct ScoreEntry {
     pub id: i64,

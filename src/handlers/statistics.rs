@@ -52,7 +52,7 @@ pub async fn show_stats_in_msg(
         let win_pct = format!("{:.0}%", stats.win_rate * 100.0);
         let avg = format!("{:.0}", stats.avg_score);
         let rating = format!("{:.0}", stats.rating);
-        let name = if stats.player_name.len() > 12 { &stats.player_name[..12] } else { &stats.player_name };
+        let name: String = stats.player_name.chars().take(12).collect();
         rows_text.push_str(&format!(
             "{} {:<2} {:<12} {:>3} {:>3} {:>5} {:>5} {:>7}\n",
             prefix, rank_num, name,
