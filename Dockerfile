@@ -1,6 +1,6 @@
 # --- Build stage ---
-FROM rust:1.85-alpine AS builder
-RUN apk add --no-cache musl-dev
+FROM rust:1.86-alpine AS builder
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo "fn main(){}" > src/main.rs && cargo build --release && rm -rf src
