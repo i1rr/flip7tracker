@@ -358,8 +358,13 @@ pub async fn handle_enter_points(
     pool: SqlitePool,
 ) -> HandlerResult {
     let chat_id = msg.chat.id;
-    let text = msg.text().unwrap_or("").trim();
 
+    // Always remove the user's typed number — the prompt message will be
+    // edited in place to show the recorded entry, so leaving the raw input
+    // behind would duplicate it visually.
+    let _ = bot.delete_message(chat_id, msg.id).await;
+
+    let text = msg.text().unwrap_or("").trim();
     let pts = match text.parse::<i64>() {
         Ok(v) => v,
         Err(_) => {

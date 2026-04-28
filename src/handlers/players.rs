@@ -160,6 +160,11 @@ pub async fn handle_renaming_message(
     (player_id, setup_msg_id): (i64, i32),
 ) -> HandlerResult {
     let chat_id = msg.chat.id;
+
+    // Remove the user's typed name — the players-management message will be
+    // refreshed in place, so the raw input shouldn't linger in the chat.
+    let _ = bot.delete_message(chat_id, msg.id).await;
+
     let text = match msg.text() {
         Some(t) => t.trim().to_string(),
         None => {

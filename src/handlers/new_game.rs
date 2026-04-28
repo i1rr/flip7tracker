@@ -56,6 +56,10 @@ pub async fn handle_typing_name(
     pool: SqlitePool,
     (players, setup_msg_id): (Vec<i64>, i32),
 ) -> HandlerResult {
+    // Remove the user's typed name — the setup message above will be edited
+    // in place to reflect the new roster, so the raw input shouldn't linger.
+    let _ = bot.delete_message(msg.chat.id, msg.id).await;
+
     let text = match msg.text() {
         Some(t) => t.trim().to_string(),
         None => {
