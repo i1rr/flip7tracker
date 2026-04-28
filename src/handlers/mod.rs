@@ -76,6 +76,10 @@ pub fn build_handler() -> UpdateHandler<Box<dyn std::error::Error + Send + Sync 
         )
         .branch(case![State::GameActive { game_id }].endpoint(game::handle_game_callback))
         .branch(
+            case![State::GameAddScoreEnterPoints { game_id, player_id }]
+                .endpoint(game::handle_score_entry_callback),
+        )
+        .branch(
             case![State::GameEditConfirm { game_id }]
                 .endpoint(game::handle_edit_confirm_callback),
         )

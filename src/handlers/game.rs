@@ -2,9 +2,10 @@ use teloxide::prelude::*;
 use teloxide::types::{ChatId, MessageId, ParseMode};
 use sqlx::SqlitePool;
 
-use crate::db::{models::Game, queries};
+use crate::db::queries;
 use crate::handlers::{HandlerResult, MyDialogue, State};
 use crate::keyboards;
+use crate::utils::rating;
 use crate::utils::scoreboard;
 
 // ---------------------------------------------------------------------------
@@ -15,28 +16,6 @@ fn q_msg(q: &CallbackQuery) -> Option<(ChatId, MessageId)> {
     q.message.as_ref().and_then(|m| {
         m.regular_message().map(|r| (m.chat().id, r.id))
     })
-}
-
-/// Delete the tracked scoreboard message and send a fresh one at the bottom.
-async fn push_scoreboard(
-    bot: &Bot,
-    pool: &SqlitePool,
-    game: &Game,
-    text: &str,
-    kb: teloxide::types::InlineKeyboardMarkup,
-) {
-    let chat_id = ChatId(game.chat_id);
-    if let Some(msg_id) = game.message_id {
-        let _ = bot.delete_message(chat_id, MessageId(msg_id as i32)).await;
-    }
-    if let Ok(sent) = bot
-        .send_message(chat_id, text)
-        .parse_mode(ParseMode::Html)
-        .reply_markup(kb)
-        .await
-    {
-        let _ = queries::update_game_message_id(pool, game.id, sent.id.0 as i64).await;
-    }
 }
 
 /// Edit an existing message to show the scoreboard (for cancel/back flows).
@@ -63,11 +42,11 @@ async fn edit_to_scoreboard(
 // Win screen text
 // ---------------------------------------------------------------------------
 fn build_win_text(
-    winner_name: &str,
+    winner_names: &[String],
     winner_score: i64,
     scores: &std::collections::HashMap<i64, i64>,
     players: &[crate::db::models::Player],
-    is_tie: bool,
+    deltas: &[rating::EloDelta],
 ) -> String {
     let medals = ["🥇", "🥈", "🥉"];
     let mut sorted: Vec<(&crate::db::models::Player, i64)> = players
@@ -76,19 +55,31 @@ fn build_win_text(
         .collect();
     sorted.sort_by(|a, b| b.1.cmp(&a.1));
 
-    let mut lines = vec![
-        format!("🏆 WINNER: {} with {} pts!", winner_name, winner_score),
-        String::new(),
-        "Final Scores:".to_string(),
-    ];
+    let header = if winner_names.len() == 1 {
+        format!("🏆 WINNER: {} with {} pts!", winner_names[0], winner_score)
+    } else {
+        format!(
+            "🏆 JOINT WINNERS: {} — tied at {} pts!",
+            winner_names.join(", "),
+            winner_score
+        )
+    };
+
+    let mut lines = vec![header, String::new(), "Final Scores:".to_string()];
     for (i, (player, score)) in sorted.iter().enumerate() {
         let medal = if i < 3 { medals[i] } else { "  " };
-        lines.push(format!("{} {}   {} pts", medal, player.name, score));
+        let delta_str = deltas
+            .iter()
+            .find(|d| d.player_id == player.id)
+            .map(|d| {
+                let sign = if d.delta >= 0.0 { "+" } else { "" };
+                format!("   ({}{:.0} → {:.0})", sign, d.delta, d.rating_after)
+            })
+            .unwrap_or_default();
+        lines.push(format!("{} {}   {} pts{}", medal, player.name, score, delta_str));
     }
-    if is_tie {
-        lines.push(String::new());
-        lines.push("🤝 Tie — first to enter wins.".to_string());
-    }
+    lines.push(String::new());
+    lines.push("📈 Rating changes shown in parentheses.".to_string());
     lines.join("\n")
 }
 
@@ -146,6 +137,8 @@ pub async fn handle_game_callback(
     let data = q.data.as_deref().unwrap_or("");
 
     // ── Player tapped — go straight to score entry ────────────────────────────
+    // Keep the full game keyboard visible so a misclick can be corrected by
+    // tapping the right player (the same callback re-fires with a new player_id).
     let score_prefix = format!("score:player:{}:", game_id);
     if let Some(rest) = data.strip_prefix(&score_prefix) {
         if let Ok(player_id) = rest.parse::<i64>() {
@@ -156,12 +149,14 @@ pub async fn handle_game_callback(
                 .find(|p| p.id == player_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
+            let kb = keyboards::game::game_keyboard(game_id, &players);
             let _ = bot
                 .edit_message_text(
                     chat_id,
                     msg_id,
                     format!("Enter score for {} (0–999):", player_name),
                 )
+                .reply_markup(kb)
                 .await;
             dialogue
                 .update(State::GameAddScoreEnterPoints { game_id, player_id })
@@ -213,9 +208,39 @@ pub async fn handle_game_callback(
     // ── End Game ─────────────────────────────────────────────────────────────
     if data == format!("game:end:{}", game_id) {
         bot.answer_callback_query(&q.id).await?;
+        let players = queries::get_game_players(&pool, game_id).await?;
+        let scores = queries::get_game_scores(&pool, game_id).await?;
+        let max_score = players
+            .iter()
+            .map(|p| *scores.get(&p.id).unwrap_or(&0))
+            .max()
+            .unwrap_or(0);
+
+        let prompt = if max_score >= 200 {
+            let winners: Vec<&str> = players
+                .iter()
+                .filter(|p| *scores.get(&p.id).unwrap_or(&0) == max_score)
+                .map(|p| p.name.as_str())
+                .collect();
+            if winners.len() == 1 {
+                format!(
+                    "End the game now? {} wins with {} pts.",
+                    winners[0], max_score
+                )
+            } else {
+                format!(
+                    "End the game now? Joint winners at {} pts: {}.",
+                    max_score,
+                    winners.join(", ")
+                )
+            }
+        } else {
+            "End the game now? No one has reached 200 yet — the game will be discarded and won't be saved to statistics.".to_string()
+        };
+
         let kb = keyboards::game::end_confirm_keyboard(game_id);
         let _ = bot
-            .edit_message_text(chat_id, msg_id, "End game without declaring a winner?")
+            .edit_message_text(chat_id, msg_id, prompt)
             .reply_markup(kb)
             .await;
         return Ok(());
@@ -231,14 +256,53 @@ pub async fn handle_game_callback(
     // ── End Game: Confirm ────────────────────────────────────────────────────
     if data == format!("game:end_confirm:{}", game_id) {
         bot.answer_callback_query(&q.id).await?;
-        let game_players = queries::get_game_players(&pool, game_id).await?;
-        let last_ids: Vec<i64> = game_players.iter().map(|p| p.id).collect();
-        queries::finish_game(&pool, game_id, None).await?;
+        let players = queries::get_game_players(&pool, game_id).await?;
+        let scores = queries::get_game_scores(&pool, game_id).await?;
+        let max_score = players
+            .iter()
+            .map(|p| *scores.get(&p.id).unwrap_or(&0))
+            .max()
+            .unwrap_or(0);
+
+        if max_score < 200 {
+            // Nobody reached 200 — discard the game so it doesn't pollute stats.
+            queries::discard_game(&pool, game_id).await?;
+            let _ = bot.delete_message(chat_id, msg_id).await;
+            dialogue.update(State::MainMenu).await?;
+            bot.send_message(chat_id, "Game discarded — no one reached 200, so it wasn't saved to statistics.")
+                .reply_markup(keyboards::menu::main_menu_keyboard())
+                .await?;
+            return Ok(());
+        }
+
+        // One or more winners tied at the highest 200+ score.
+        let winners: Vec<&crate::db::models::Player> = players
+            .iter()
+            .filter(|p| *scores.get(&p.id).unwrap_or(&0) == max_score)
+            .collect();
+        let winner_ids: Vec<i64> = winners.iter().map(|p| p.id).collect();
+        let winner_names: Vec<String> = winners.iter().map(|p| p.name.clone()).collect();
+
+        // Compute Elo updates from final scores + each player's current rating.
+        let elo_entries: Vec<rating::EloEntry> = players
+            .iter()
+            .map(|p| rating::EloEntry {
+                player_id: p.id,
+                score: *scores.get(&p.id).unwrap_or(&0),
+                rating: p.rating,
+            })
+            .collect();
+        let deltas = rating::compute_updates(&elo_entries);
+
+        queries::finish_game_with_winners(&pool, game_id, &winner_ids, &deltas).await?;
+        let last_ids: Vec<i64> = players.iter().map(|p| p.id).collect();
         let _ = queries::save_last_players(&pool, chat_id.0, &last_ids).await;
+
         let _ = bot.delete_message(chat_id, msg_id).await;
+        let win_text = build_win_text(&winner_names, max_score, &scores, &players, &deltas);
         dialogue.update(State::MainMenu).await?;
-        bot.send_message(chat_id, "Game over — no winner declared.")
-            .reply_markup(keyboards::menu::main_menu_keyboard())
+        bot.send_message(chat_id, &win_text)
+            .reply_markup(keyboards::game::win_keyboard())
             .await?;
         return Ok(());
     }
@@ -264,6 +328,23 @@ pub async fn handle_game_callback(
 
     bot.answer_callback_query(&q.id).await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// State::GameAddScoreEnterPoints callback handler
+// ---------------------------------------------------------------------------
+// While the user is mid-entry, the game keyboard stays attached to the prompt
+// so they can correct a misclick or jump to Edit Last / End Game without
+// having to type a throwaway score first. The callbacks themselves are
+// identical to the GameActive ones, so we just forward.
+pub async fn handle_score_entry_callback(
+    bot: Bot,
+    dialogue: MyDialogue,
+    q: CallbackQuery,
+    pool: SqlitePool,
+    (game_id, _player_id): (i64, i64),
+) -> HandlerResult {
+    handle_game_callback(bot, dialogue, q, pool, game_id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -294,54 +375,41 @@ pub async fn handle_enter_points(
 
     queries::add_score_entry(&pool, game_id, player_id, pts).await?;
 
-    let scores = queries::get_game_scores(&pool, game_id).await?;
+    // Per Flip 7 rules, the round must finish before the game ends, so we never
+    // auto-end here even if a player has crossed 200 — that's the End Game
+    // button's job.
     let players = queries::get_game_players(&pool, game_id).await?;
+    let player_name = players
+        .iter()
+        .find(|p| p.id == player_id)
+        .map(|p| p.name.as_str())
+        .unwrap_or("Unknown");
 
-    // Check for winner (>= 200 pts)
-    let winner = players.iter().filter_map(|p| {
-        let s = *scores.get(&p.id).unwrap_or(&0);
-        if s >= 200 { Some((p.id, s)) } else { None }
-    }).max_by_key(|&(_, s)| s);
-
-    if let Some((win_player_id, win_score)) = winner {
-        queries::finish_game(&pool, game_id, Some(win_player_id)).await?;
-        let last_ids: Vec<i64> = players.iter().map(|p| p.id).collect();
-        let _ = queries::save_last_players(&pool, chat_id.0, &last_ids).await;
-
-        let win_name = players
-            .iter()
-            .find(|p| p.id == win_player_id)
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| "Unknown".to_string());
-
-        let tie = players.iter().any(|p| {
-            p.id != win_player_id && *scores.get(&p.id).unwrap_or(&0) >= 200
-        });
-
-        let game_vec = queries::get_unfinished_games(&pool, chat_id.0).await;
-        if let Ok(gv) = game_vec {
-            if let Some(g) = gv.into_iter().find(|g| g.id == game_id) {
-                if let Some(mid) = g.message_id {
-                    let _ = bot.delete_message(chat_id, MessageId(mid as i32)).await;
-                }
-            }
+    let game_vec = queries::get_unfinished_games(&pool, chat_id.0).await?;
+    if let Some(game) = game_vec.into_iter().find(|g| g.id == game_id) {
+        // Turn the prompt message in place into a permanent record of the
+        // entry, then push a fresh scoreboard at the bottom. The record line
+        // sits just above the user's typed number, giving a clean trail of
+        // who got what without any extra typing or deletions.
+        if let Some(prompt_msg_id) = game.message_id {
+            let record = format!("✏️ {}: {}", player_name, pts);
+            let _ = bot
+                .edit_message_text(chat_id, MessageId(prompt_msg_id as i32), record)
+                .await;
         }
-
-        let win_text = build_win_text(&win_name, win_score, &scores, &players, tie);
-        dialogue.update(State::MainMenu).await?;
-        bot.send_message(chat_id, &win_text)
-            .reply_markup(keyboards::game::win_keyboard())
-            .await?;
-    } else {
-        let game_vec = queries::get_unfinished_games(&pool, chat_id.0).await?;
-        if let Some(game) = game_vec.into_iter().find(|g| g.id == game_id) {
-            let board_text = scoreboard::render_scoreboard(&scores, &players, game_id);
-            let kb = keyboards::game::game_keyboard(game_id, &players);
-            push_scoreboard(&bot, &pool, &game, &board_text, kb).await;
+        let scores = queries::get_game_scores(&pool, game_id).await?;
+        let board_text = scoreboard::render_scoreboard(&scores, &players, game_id);
+        let kb = keyboards::game::game_keyboard(game_id, &players);
+        if let Ok(sent) = bot
+            .send_message(chat_id, board_text)
+            .parse_mode(ParseMode::Html)
+            .reply_markup(kb)
+            .await
+        {
+            let _ = queries::update_game_message_id(&pool, game_id, sent.id.0 as i64).await;
         }
-        dialogue.update(State::GameActive { game_id }).await?;
     }
-
+    dialogue.update(State::GameActive { game_id }).await?;
     Ok(())
 }
 

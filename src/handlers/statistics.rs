@@ -40,8 +40,8 @@ pub async fn show_stats_in_msg(
     let page_stats: Vec<_> = all_stats.iter().skip(start).take(per_page).collect();
 
     let medals = ["🥇", "🥈", "🥉"];
-    let header = "📊 Flip 7 — Hall of Fame\n\n";
-    let col_header = format!("{:<3} {:<12} {:>3} {:>3} {:>5} {:>5} {:>7}\n", "#", "Player", "G", "W", "Win%", "Avg", "Rating");
+    let header = "📊 Flip 7 — Hall of Fame\n(ranked by Elo rating — start at 1000, win to climb)\n\n";
+    let col_header = format!("{:<3} {:<12} {:>3} {:>3} {:>5} {:>5} {:>6}\n", "#", "Player", "G", "W", "Win%", "Avg", "Elo");
     let separator = "━".repeat(col_header.chars().count().saturating_sub(1)) + "\n";
 
     let mut rows_text = String::new();
@@ -54,7 +54,7 @@ pub async fn show_stats_in_msg(
         let rating = format!("{:.0}", stats.rating);
         let name: String = stats.player_name.chars().take(12).collect();
         rows_text.push_str(&format!(
-            "{} {:<2} {:<12} {:>3} {:>3} {:>5} {:>5} {:>7}\n",
+            "{} {:<2} {:<12} {:>3} {:>3} {:>5} {:>5} {:>6}\n",
             prefix, rank_num, name,
             stats.games, stats.wins, win_pct, avg, rating
         ));
@@ -96,7 +96,7 @@ async fn show_player_detail_in_msg(
 ) -> HandlerResult {
     let stats = queries::get_player_stats(pool, player_id).await?;
     let text = format!(
-        "👤 {}\n\nGames played:   {}\nWins:            {}  ({:.0}%)\nLosses:          {}\nHighest score:  {} pts\nAvg per game:   {:.0} pts\nTotal pts ever: {} pts\nRating:         {:.0}",
+        "👤 {}\n\nGames played:   {}\nWins:            {}  ({:.0}%)\nLosses:          {}\nHighest score:  {} pts\nAvg per game:   {:.0} pts\nTotal pts ever: {} pts\nElo rating:     {:.0}",
         stats.player_name, stats.games, stats.wins, stats.win_rate * 100.0,
         stats.losses, stats.highest_score, stats.avg_score, stats.total_points, stats.rating
     );

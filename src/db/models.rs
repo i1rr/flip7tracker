@@ -8,6 +8,7 @@ pub struct Player {
     pub name: String,
     pub is_deleted: bool,
     pub created_at: DateTime<Utc>,
+    pub rating: f64,
 }
 
 #[allow(dead_code)]
