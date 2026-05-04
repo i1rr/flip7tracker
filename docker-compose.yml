@@ -1,7 +1,7 @@
 services:
   flip7bot:
     build: .
-    restart: on-failure
+    restart: unless-stopped
     env_file: .env
     user: root
     volumes:
