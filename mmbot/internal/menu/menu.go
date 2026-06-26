@@ -75,6 +75,14 @@ func (m *Menu) mainMenuAttachments() []*model.SlackAttachment {
 	return []*model.SlackAttachment{{Actions: actions}}
 }
 
+// MainMenuResponse re-renders the originating post into the main menu in place.
+// It is the "← Back" target injected into screen packages (e.g.
+// newgame.WithMainMenuRenderer) so they can return to the menu without importing
+// menu's unexported builders.
+func (m *Menu) MainMenuResponse() *model.PostActionIntegrationResponse {
+	return nav.UpdateResponse(mainMenuText, m.mainMenuAttachments())
+}
+
 // PostMainMenu posts a fresh main-menu nav post to the channel and returns its
 // id. Used by `/flip7` (empty arg).
 func (m *Menu) PostMainMenu(ctx context.Context, channelID string) (string, error) {
