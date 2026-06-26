@@ -1,0 +1,12 @@
+# Never bake secrets, local databases, build artifacts, or VCS metadata into
+# image layers.
+.env
+*.db
+*.db-wal
+*.db-shm
+mmbot
+bin/
+.git
+*.log
+scratch/
+testdata/tmp/

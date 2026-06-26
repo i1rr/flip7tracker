@@ -1,4 +1,12 @@
 .env
 *.db
+*.db-wal
+*.db-shm
 target/
 .sqlx/
+.plan-executor/
+
+# Go (mmbot) build artifacts and secrets
+mmbot/.env
+mmbot/mmbot
+mmbot/bin/
