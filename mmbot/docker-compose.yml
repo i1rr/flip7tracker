@@ -1,0 +1,58 @@
+# flip7bot (Go / Mattermost) deployment.
+#
+# This bot does NOT publish any port to the host. It is reachable only by other
+# containers on the Mattermost stack's bridge network, where Mattermost calls
+# its /slash, /action, and /dialog endpoints and the healthcheck probes
+# /healthz on port 8068.
+#
+# Networking model
+# ----------------
+# The bot joins the Mattermost stack's *existing* bridge network as an external
+# network (compose will NOT create it — it must already exist; bring up the
+# Mattermost stack first). It is given a fixed IP so INTEGRATION_BASE_URL is
+# stable across restarts.
+#
+#   Chosen fixed IP:  172.28.0.5  (subnet 172.28.0.0/16)
+#   => set in .env:   INTEGRATION_BASE_URL=http://172.28.0.5:8068
+#                     MM_URL=http://<mattermost-container-bridge-ip>:8065
+#
+# IMPORTANT: replace `mattermost_default` below with the actual name of the
+# Mattermost stack's network. Find it with:  docker network ls
+#
+# Storage
+# -------
+# The existing `flip7_data` volume (carried over from the Rust deployment, and
+# holding flip7.db) is mounted at /data. It is declared external so this compose
+# file never recreates or wipes it.
+
+services:
+  flip7bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: flip7bot:latest
+    container_name: flip7bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - flip7_data:/data
+    networks:
+      mmnet:
+        ipv4_address: 172.28.0.5
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8068/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  # The Mattermost stack's existing bridge network. Rename to match your stack.
+  mmnet:
+    external: true
+    name: mattermost_default
+
+volumes:
+  # The existing flip7_data volume (must already exist; not created here).
+  flip7_data:
+    external: true
