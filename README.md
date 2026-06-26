@@ -1,6 +1,59 @@
 # Flip7 Tracker Bot
 
-A Telegram bot for tracking scores in the physical card game **Flip7**. One host manages the game: adds players, enters scores after each hand, and the bot maintains a live scoreboard, auto-detecting the winner at 200+ points.
+A bot for tracking scores in the physical card game **Flip7**. One host manages the game: adds players, enters scores after each hand, and the bot maintains a live scoreboard, resolving the winner at a manual End Game (top score ≥ 200).
+
+> **Migration in progress: Telegram (Rust) → Mattermost (Go).**
+> The current/active implementation is the **Go Mattermost bot** under
+> [`mmbot/`](mmbot/). It is at feature parity with the original Rust/teloxide
+> Telegram bot and reuses the same `flip7.db` SQLite data (via an additive,
+> data-preserving migration). The Rust tree (`src/`, `Cargo.toml`, etc.) is
+> retained for now only as the code half of the documented rollback and will be
+> retired in a dedicated cutover commit once the Go bot is validated in
+> production.
+>
+> See [`mmbot/CLAUDE.md`](mmbot/CLAUDE.md) for the full Mattermost architecture,
+> environment variables, first-deploy provisioning order, Docker-on-bridge
+> deployment, slash-command registration, and the WAL-aware migration/rollback
+> procedure, and [`mmbot/SMOKE_TEST.md`](mmbot/SMOKE_TEST.md) for the acceptance
+> checklist.
+
+## Go / Mattermost bot (`mmbot/`, active)
+
+The Go bot keeps a **live scoreboard post edited in place** in a single owner-only
+Mattermost channel, with a thread per game. The Telegram inline-keyboard /
+force-reply mechanics are replaced by interactive **buttons** (`POST /action`) and
+**dialogs** (`POST /dialog`) carrying **HMAC-signed nav-state**; the five Telegram
+commands collapse to one `/flip7` slash command. There are no in-memory sessions —
+every interaction re-reads SQLite by `game_id` and re-renders.
+
+```bash
+cd mmbot
+make check                 # build + vet + test + gofmt gate
+go build -o mmbot ./cmd/mmbot
+```
+
+Deployment is **Docker Compose on the existing Mattermost bridge** (fixed IP
+`172.28.0.5` on `172.28.0.0/16`, inbound port `8068` not published to the host),
+reusing the external `flip7_data` volume:
+
+```bash
+cd mmbot
+cp .env.example .env        # fill in MM connection, owner, HMAC_KEY; chmod 600 .env
+# (provision the MM bot/team/channel first — see mmbot/CLAUDE.md)
+./scripts/register.sh       # create /flip7 and capture SLASH_TOKEN_FLIP7
+# back up flip7.db (WAL-safe) BEFORE the first start — see mmbot/CLAUDE.md
+docker compose build && docker compose up -d
+```
+
+Configuration env vars, the provisioning order, and the rollback procedure are
+documented in [`mmbot/CLAUDE.md`](mmbot/CLAUDE.md).
+
+---
+
+## Legacy Telegram bot (Rust, retained for rollback)
+
+The sections below describe the original Telegram/Rust implementation. It is no
+longer the deployment target.
 
 ## Features
 
