@@ -1,0 +1,60 @@
+{
+  "_generated_by": "cargo run --example gen_elo_golden > mmbot/internal/rating/testdata/elo_golden.json",
+  "cases": [
+    {
+      "name": "two_equal_players_winner",
+      "entries": [{"player_id": 1, "score": 200, "rating": 1000.0}, {"player_id": 2, "score": 150, "rating": 1000.0}],
+      "expected": [{"player_id": 1, "rating_before": 1000.0, "rating_after": 1012.0, "delta": 12.0}, {"player_id": 2, "rating_before": 1000.0, "rating_after": 988.0, "delta": -12.0}]
+    },
+    {
+      "name": "equal_scores_draw",
+      "entries": [{"player_id": 1, "score": 200, "rating": 1000.0}, {"player_id": 2, "score": 200, "rating": 1000.0}],
+      "expected": [{"player_id": 1, "rating_before": 1000.0, "rating_after": 1000.0, "delta": 0.0}, {"player_id": 2, "rating_before": 1000.0, "rating_after": 1000.0, "delta": 0.0}]
+    },
+    {
+      "name": "favourite_beats_underdog",
+      "entries": [{"player_id": 1, "score": 210, "rating": 1300.0}, {"player_id": 2, "score": 100, "rating": 1000.0}],
+      "expected": [{"player_id": 1, "rating_before": 1300.0, "rating_after": 1303.6235093730718, "delta": 3.6235093730717587}, {"player_id": 2, "rating_before": 1000.0, "rating_after": 996.3764906269282, "delta": -3.6235093730717587}]
+    },
+    {
+      "name": "upset_underdog_wins",
+      "entries": [{"player_id": 1, "score": 220, "rating": 1000.0}, {"player_id": 2, "score": 200, "rating": 1300.0}],
+      "expected": [{"player_id": 1, "rating_before": 1000.0, "rating_after": 1020.3764906269282, "delta": 20.37649062692824}, {"player_id": 2, "rating_before": 1300.0, "rating_after": 1279.6235093730718, "delta": -20.37649062692824}]
+    },
+    {
+      "name": "three_player_distinct_scores",
+      "entries": [{"player_id": 1, "score": 250, "rating": 1000.0}, {"player_id": 2, "score": 200, "rating": 1000.0}, {"player_id": 3, "score": 150, "rating": 1000.0}],
+      "expected": [{"player_id": 1, "rating_before": 1000.0, "rating_after": 1012.0, "delta": 12.0}, {"player_id": 2, "rating_before": 1000.0, "rating_after": 1000.0, "delta": 0.0}, {"player_id": 3, "rating_before": 1000.0, "rating_after": 988.0, "delta": -12.0}]
+    },
+    {
+      "name": "joint_winners_split",
+      "entries": [{"player_id": 1, "score": 210, "rating": 1000.0}, {"player_id": 2, "score": 210, "rating": 1000.0}, {"player_id": 3, "score": 180, "rating": 1000.0}],
+      "expected": [{"player_id": 1, "rating_before": 1000.0, "rating_after": 1006.0, "delta": 6.0}, {"player_id": 2, "rating_before": 1000.0, "rating_after": 1006.0, "delta": 6.0}, {"player_id": 3, "rating_before": 1000.0, "rating_after": 988.0, "delta": -12.0}]
+    },
+    {
+      "name": "mixed_ratings_four_players_with_tie",
+      "entries": [{"player_id": 1, "score": 240, "rating": 800.0}, {"player_id": 2, "score": 240, "rating": 1400.0}, {"player_id": 3, "score": 100, "rating": 1000.0}, {"player_id": 4, "score": 50, "rating": 1100.0}],
+      "expected": [{"player_id": 1, "rating_before": 800.0, "rating_after": 816.6249115152393, "delta": 16.624911515239354}, {"player_id": 2, "rating_before": 1400.0, "rating_after": 1398.180336625217, "delta": -1.8196633747829623}, {"player_id": 3, "rating_before": 1000.0, "rating_after": 998.3152718579666, "delta": -1.6847281420333102}, {"player_id": 4, "rating_before": 1100.0, "rating_after": 1086.879480001577, "delta": -13.120519998423081}]
+    },
+    {
+      "name": "non_default_ratings_three_players",
+      "entries": [{"player_id": 1, "score": 220, "rating": 987.5}, {"player_id": 2, "score": 180, "rating": 1042.3}, {"player_id": 3, "score": 100, "rating": 1100.0}],
+      "expected": [{"player_id": 1, "rating_before": 987.5, "rating_after": 1002.3162306362439, "delta": 14.816230636243848}, {"player_id": 2, "rating_before": 1042.3, "rating_after": 1042.3487908494758, "delta": 0.048790849475933484}, {"player_id": 3, "rating_before": 1100.0, "rating_after": 1085.1349785142802, "delta": -14.865021485719783}]
+    },
+    {
+      "name": "single_player_no_change",
+      "entries": [{"player_id": 7, "score": 200, "rating": 1234.5}],
+      "expected": [{"player_id": 7, "rating_before": 1234.5, "rating_after": 1234.5, "delta": 0.0}]
+    },
+    {
+      "name": "empty_input",
+      "entries": [],
+      "expected": []
+    },
+    {
+      "name": "five_player_mixed_with_joint_winners",
+      "entries": [{"player_id": 11, "score": 205, "rating": 1150.0}, {"player_id": 22, "score": 205, "rating": 980.0}, {"player_id": 33, "score": 190, "rating": 1075.0}, {"player_id": 44, "score": 130, "rating": 1000.0}, {"player_id": 55, "score": 130, "rating": 1320.0}],
+      "expected": [{"player_id": 11, "rating_before": 1150.0, "rating_after": 1157.1419630364564, "delta": 7.141963036456461}, {"player_id": 22, "rating_before": 980.0, "rating_after": 993.5913059310274, "delta": 13.591305931027389}, {"player_id": 33, "rating_before": 1075.0, "rating_after": 1076.0224649161212, "delta": 1.0224649161211006}, {"player_id": 44, "rating_before": 1000.0, "rating_after": 994.8646922485707, "delta": -5.13530775142933}, {"player_id": 55, "rating_before": 1320.0, "rating_after": 1303.3795738678243, "delta": -16.62042613217562}]
+    }
+  ]
+}
