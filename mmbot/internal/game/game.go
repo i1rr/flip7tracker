@@ -3,6 +3,7 @@ package game
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -240,7 +241,7 @@ func (s *Screen) Dialog(ctx context.Context, req *model.SubmitDialogRequest, ns 
 		return &model.SubmitDialogResponse{Error: playerGoneMsg}, nil
 	}
 
-	raw, _ := req.Submission["points"].(string)
+	raw := pointsSubmissionString(req.Submission["points"])
 	pts, ok := parsePoints(raw)
 	if !ok {
 		return &model.SubmitDialogResponse{Errors: map[string]string{"points": invalidPtsMsg}}, nil
@@ -431,6 +432,25 @@ func (s *Screen) reply(ctx context.Context, channelID, rootID, message string) {
 // --- pure helpers -----------------------------------------------------------
 
 // parsePoints parses a typed score, enforcing a whole number in [0, 999].
+// pointsSubmissionString coerces the dialog "points" submission value to a
+// string for parsePoints. A text element with SubType "number" is delivered by
+// Mattermost as a JSON number (float64), NOT a string, so a plain string
+// type-assertion silently drops every entry. A whole float renders without a
+// decimal point (20.0 -> "20") so parsePoints accepts it; a fractional value
+// keeps its '.' and is correctly rejected as not a whole number.
+func pointsSubmissionString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case json.Number:
+		return t.String()
+	default:
+		return ""
+	}
+}
+
 func parsePoints(raw string) (int64, bool) {
 	v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 	if err != nil {

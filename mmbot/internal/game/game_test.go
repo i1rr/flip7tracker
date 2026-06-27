@@ -251,6 +251,37 @@ func TestScoreEntrySubmit(t *testing.T) {
 	}
 }
 
+// TestScoreEntrySubmitNumberType guards the real Mattermost wire shape: a
+// SubType "number" dialog field arrives as a JSON number (float64), not a
+// string. The handler must accept it instead of rejecting every score.
+func TestScoreEntrySubmitNumberType(t *testing.T) {
+	s, _, database := newTestScreen(t)
+	ctx := context.Background()
+	gid, players := seedGame(t, database, "Alice", "Bob")
+	req := &model.SubmitDialogRequest{ChannelId: testChannel, Submission: map[string]any{"points": float64(20)}}
+	ns := mm.NavState{Action: mm.ActScorePlayer, GameID: gid, PlayerID: players[0].ID, PostID: "root1"}
+	resp, err := s.Dialog(ctx, req, ns)
+	if err != nil {
+		t.Fatalf("dialog: %v", err)
+	}
+	if len(resp.Errors) != 0 || resp.Error != "" {
+		t.Fatalf("unexpected dialog error for float64 points: %+v", resp)
+	}
+	scores, _ := db.GetGameScores(ctx, database, gid)
+	if scores[players[0].ID] != 20 {
+		t.Errorf("expected 20 recorded from float64 submission, got %d", scores[players[0].ID])
+	}
+	// A fractional number must still be rejected as not a whole number.
+	req2 := &model.SubmitDialogRequest{ChannelId: testChannel, Submission: map[string]any{"points": float64(20.5)}}
+	resp2, err := s.Dialog(ctx, req2, ns)
+	if err != nil {
+		t.Fatalf("dialog(20.5): %v", err)
+	}
+	if resp2.Errors["points"] == "" {
+		t.Errorf("expected points error for fractional 20.5")
+	}
+}
+
 func TestScoreEntryInvalidPoints(t *testing.T) {
 	s, _, database := newTestScreen(t)
 	gid, players := seedGame(t, database, "Alice", "Bob")
