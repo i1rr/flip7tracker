@@ -110,4 +110,5 @@ With the Go container stopped:
 1. Delete the post-migration `flip7.db-wal` / `flip7.db-shm` sidecars on the
    `flip7_data` volume.
 2. Restore `flip7.db.bak` over `flip7.db`.
-3. Redeploy the Rust bot.
+3. Redeploy the Rust bot (its source is recoverable from git history — check out
+   the pre-cutover commit to rebuild the Rust image).

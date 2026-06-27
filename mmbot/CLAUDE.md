@@ -241,8 +241,9 @@ rollback is *"restore the pre-migration backup + redeploy the Rust bot"*, not
 2. Restore `flip7.db.bak` over `flip7.db`.
 3. Redeploy the Rust bot.
 
-The Rust working tree is intentionally retained (until cutover, Step 26) as the
-code half of this rollback.
+The Rust working tree was retired in the cutover commit; its source (the code
+half of this rollback) is recoverable from git history — check out the
+pre-cutover commit to rebuild the Rust image.
 
 ## Smoke tests
 

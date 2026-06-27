@@ -2,14 +2,13 @@
 
 A bot for tracking scores in the physical card game **Flip7**. One host manages the game: adds players, enters scores after each hand, and the bot maintains a live scoreboard, resolving the winner at a manual End Game (top score ≥ 200).
 
-> **Migration in progress: Telegram (Rust) → Mattermost (Go).**
-> The current/active implementation is the **Go Mattermost bot** under
+> **Migration complete: Telegram (Rust) → Mattermost (Go).**
+> The active and only implementation is the **Go Mattermost bot** under
 > [`mmbot/`](mmbot/). It is at feature parity with the original Rust/teloxide
 > Telegram bot and reuses the same `flip7.db` SQLite data (via an additive,
-> data-preserving migration). The Rust tree (`src/`, `Cargo.toml`, etc.) is
-> retained for now only as the code half of the documented rollback and will be
-> retired in a dedicated cutover commit once the Go bot is validated in
-> production.
+> data-preserving migration). The Rust tree (`src/`, `Cargo.toml`, etc.) has been
+> retired from the working tree; its source remains recoverable from git history
+> (the pre-cutover commit) as the code half of the documented rollback.
 >
 > See [`mmbot/CLAUDE.md`](mmbot/CLAUDE.md) for the full Mattermost architecture,
 > environment variables, first-deploy provisioning order, Docker-on-bridge
@@ -48,98 +47,33 @@ docker compose build && docker compose up -d
 Configuration env vars, the provisioning order, and the rollback procedure are
 documented in [`mmbot/CLAUDE.md`](mmbot/CLAUDE.md).
 
----
-
-## Legacy Telegram bot (Rust, retained for rollback)
-
-The sections below describe the original Telegram/Rust implementation. It is no
-longer the deployment target.
-
 ## Features
 
 - Live scoreboard, edited in-place after every score entry
-- Auto-winner detection at 200+ points with tie-breaking
+- Auto-winner detection at 200+ points with tie-breaking (incl. multi-winner ties)
 - New game setup with inline player management
 - Load & resume unfinished games
-- Hall of Fame statistics with Elo-style rating
+- Hall of Fame statistics with Elo rating
 - Per-player detail cards with win rate and avg score
 - SQLite persistence across restarts
-- Docker deployment with Alpine (~15 MB image)
-
-## Tech Stack
-
-| Component  | Choice                        |
-|------------|-------------------------------|
-| Language   | Rust (stable, 1.80+)          |
-| Telegram   | teloxide 0.13                 |
-| Async      | tokio                         |
-| Database   | SQLx 0.8 + SQLite             |
-| Config     | dotenvy + serde + envy        |
-| Deployment | Docker multi-stage, Alpine    |
-
-## Quick Start
-
-### Local
-
-```bash
-cp .env.example .env
-# Edit .env: set BOT_TOKEN and optionally ALLOWED_CHAT_IDS
-cargo run
-```
-
-### Docker
-
-```bash
-cp .env.example .env
-# Edit .env
-docker compose build
-docker compose up -d
-docker compose logs -f
-```
-
-Migrations run automatically on startup. The SQLite database is stored in a Docker volume (`flip7_data`).
-
-## Configuration
-
-Copy `.env.example` to `.env` and fill in the values:
-
-```env
-BOT_TOKEN=123456:your-token-here
-
-# Optional: restrict to specific chat IDs (comma-separated, no spaces)
-# Leave empty to allow all chats (dev mode)
-ALLOWED_CHAT_IDS=-100123456,-100789012
-
-DATABASE_URL=sqlite:///data/flip7.db
-LOG_LEVEL=info
-```
-
-## Bot Commands
-
-| Command       | Description                              |
-|---------------|------------------------------------------|
-| `/start`      | Open main menu                           |
-| `/menu`       | Open main menu (resets current session)  |
-| `/scoreboard` | Re-send scoreboard to bottom of chat     |
-| `/cancel`     | Cancel current action                    |
-| `/help`       | Show help text                           |
+- Docker deployment on the Mattermost bridge
 
 ## Database Schema
 
 ```
-players       (id, name UNIQUE, is_deleted, created_at)
-games         (id, chat_id, message_id, started_at, finished_at, winner_player_id)
+players       (id, name UNIQUE, is_deleted, rating, created_at)
+games         (id, channel_id TEXT, post_id TEXT, started_at, finished_at, winner_player_id)
 game_players  (game_id, player_id)
 score_entries (id, game_id, player_id, points, created_at)
+game_winners  (game_id, player_id)
+rating_history(...)
 ```
 
-Scores are computed as `SUM(score_entries.points)` per player per game. `score_entries` is an append-only audit log; editing removes the last entry. Soft-deleted players are preserved in historical stats.
-
-## Rating Formula
-
-```
-rating = 1000 + (wins × 100) + (win_rate% × 50) + (avg_score_per_game × 0.5)
-```
+Scores are computed as `SUM(score_entries.points)` per player per game.
+`score_entries` is an append-only audit log; editing removes the last entry.
+Soft-deleted players are preserved in historical stats. Ratings use an Elo model
+(see [`mmbot/internal/rating`](mmbot/internal/rating/) and
+[`mmbot/CLAUDE.md`](mmbot/CLAUDE.md) for the migration/schema details).
 
 ## Backup
 
@@ -147,15 +81,21 @@ Add to host crontab for daily SQLite backups (keeps 30 days):
 
 ```bash
 0 3 * * * docker run --rm \
-  -v flip7bot_flip7_data:/data \
+  -v flip7_data:/data \
   -v /opt/backups:/backup \
   keinos/sqlite3 \
   sqlite3 /data/flip7.db ".backup /backup/flip7_$(date +\%Y\%m\%d).db" \
   && find /opt/backups -name "*.db" -mtime +30 -delete
 ```
 
-## Notes
+> The Go bot runs SQLite in WAL mode; `.backup` is WAL-safe. See
+> [`mmbot/CLAUDE.md`](mmbot/CLAUDE.md) for the WAL-aware pre-migration backup and
+> rollback procedure.
 
-- FSM state is in-memory only. On bot restart, conversation state is cleared but game data is fully preserved in SQLite. Users resume via **Load Game**.
-- The `bundled` SQLx feature compiles libsqlite3 statically, no system sqlite3 needed.
-- `su-exec` is used instead of `gosu` for Alpine compatibility.
+## History
+
+The original implementation was a Telegram bot written in Rust (teloxide + SQLx).
+It was migrated to the Go/Mattermost bot under [`mmbot/`](mmbot/); the Rust tree
+(`src/`, `Cargo.toml`, the old `Dockerfile`/`docker-compose.yml`, `migrations/`,
+etc.) was retired from the working tree in the cutover commit and remains
+recoverable from git history.
