@@ -54,5 +54,7 @@ networks:
 
 volumes:
   # The existing flip7_data volume (must already exist; not created here).
+  # On this host the Rust deployment created it as `flip7bot_flip7_data`.
   flip7_data:
     external: true
+    name: flip7bot_flip7_data
